@@ -11,13 +11,14 @@ mod ig_error;
 use capstone::{Capstone, InsnGroupId, InsnGroupType};
 use capstone::arch::{self, BuildsCapstone, BuildsCapstoneSyntax};
 use clap::Parser;
-use cli_args::CLIArgs;
+use cli_args::{CLIArgs, GadgetConstraints};
 use gadget_tree::GadgetTree;
 use ig_error::IGError;
 use indicatif::{ParallelProgressIterator, ProgressIterator};
 use object::{Object, ObjectSegment};
 use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
-use std::sync::Arc;
+use regex::Regex;
+use std::sync::{Arc, Mutex};
 
 // object_arch_to_cs_arch() returns the corresponding capstone::arch enum value
 // for the provided object::Architecture enum value.
@@ -43,62 +44,62 @@ fn object_arch_to_cs_arch(arch: object::Architecture) -> Option<capstone::Arch> 
 }
 
 // init_capstone() constructs a Capstone object for the correct arch
-fn init_capstone(arch: object::Architecture) -> Result<Capstone, IGError> {
+fn init_capstone(arch: object::Architecture, enable_detail: bool) -> Result<Capstone, IGError> {
     match arch {
         object::Architecture::Aarch64 => Ok(Capstone::new()
             .arm64()
             .mode(arch::arm64::ArchMode::Arm)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for arm64!")),
         object::Architecture::Arm => Ok(Capstone::new()
             .arm()
             .mode(arch::arm::ArchMode::Arm)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for arm!")),
         object::Architecture::Mips64 => Ok(Capstone::new()
             .mips()
             .mode(arch::mips::ArchMode::Mips64)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for mips64!")),
         object::Architecture::Mips => Ok(Capstone::new()
             .mips()
             .mode(arch::mips::ArchMode::Mips32)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for mips!")),
         object::Architecture::PowerPc64 => Ok(Capstone::new()
             .ppc()
             .mode(arch::ppc::ArchMode::Mode64)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for powerpc64!")),
         object::Architecture::PowerPc => Ok(Capstone::new()
             .ppc()
             .mode(arch::ppc::ArchMode::Mode32)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for powerpc32!")),
         object::Architecture::X86_64 | object::Architecture::X86_64_X32 => Ok(Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode64)
             .syntax(arch::x86::ArchSyntax::Intel)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for x86(_64)!")),
         object::Architecture::I386 => Ok(Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode32)
             .syntax(arch::x86::ArchSyntax::Intel)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for x86(_64)!")),
         object::Architecture::Sparc64 => Ok(Capstone::new()
             .sparc()
             .mode(arch::sparc::ArchMode::Default)
-            .detail(true)
+            .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for sparc!")),
         _ => Err(IGError::new("Unexpected architecture!"))
@@ -108,9 +109,6 @@ fn init_capstone(arch: object::Architecture) -> Result<Capstone, IGError> {
 // valid_gadget_start_addrs() returns an owned vec<usize> of all the valid
 // start addresses for a gadget within the given segment.
 fn valid_gadget_start_addrs(segment: &object::Segment, arch: object::Architecture) -> Vec<usize> {
-    // init ofs_vec
-    let mut ofs_vec: Vec<usize> = Vec::new();
-
     // grab segment start and end addrs
     let segment_start_addr: usize = segment.address() as usize;
     let segment_end_addr: usize = segment_start_addr + segment.size() as usize;
@@ -130,28 +128,39 @@ fn valid_gadget_start_addrs(segment: &object::Segment, arch: object::Architectur
         _ => 0
     };
 
-    // fill the vector
-    for start_addr in (segment_start_addr..(segment_end_addr + 1)).step_by(instr_alignment) {
-        ofs_vec.push(start_addr);
+    // iterate over the valid start addresses and return a vec containing them
+    (segment_start_addr..(segment_end_addr + 1))
+        .step_by(instr_alignment)
+        .collect()
+}
+
+// is_valid_gadget_len() returns true if a gadget length is valid given the
+// passed GadgetConstraints object.
+fn is_valid_gadget_len(n_insns: usize, constraints: GadgetConstraints) -> bool {
+    // if we have too few insns, this length is invalid
+    if n_insns < constraints.min_insns {
+        return false
+    }
+    // if we have too many insns, this length is invalid
+    if n_insns > constraints.max_insns {
+        return false;
     }
 
-    // return ofs_vec
-    ofs_vec
+    // if we got here, the length is valid
+    true
 }
 
 // find_gadget() finds a single gadget and returns the string representation
 // of its mnemonics if one is found.
-fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture) -> Option<(usize, Vec<&[u8]>)> {
-    // init capstone
-    let cs: Capstone = init_capstone(arch).unwrap();
-
-    // use capstone to actuallly do the disassembly
+fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
+    // init capstone and use it to do the disassembly
+    let cs: Capstone = init_capstone(arch, true).unwrap();
     let insns = cs.disasm_all(search_bytes, addr as u64)
-                                            .expect("Capstone failed disassembly!");
+                .expect("Capstone failed disassembly!");
     
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
-    let mut found_gadget: bool = false;
+    let mut found_valid_gadget: bool = false;
     let mut gadget_slices: Vec<&[u8]> = Vec::new();
     for insn in insns.as_ref() {
         // update gadget_len
@@ -159,10 +168,53 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture) -> 
         let end_ofs: usize = start_ofs + (insn.len() as usize);
         gadget_slices.push(&search_bytes[start_ofs..end_ofs]);
 
-        // check if previous instruction's id was a terminating instruction
+        // grab this instruction's groups
+        let detail = cs.insn_detail(insn).unwrap();
+
+        // relative branches are always direct jumps and therefore not allowed
+        let rel_br_grp_id = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE.try_into().unwrap());
+        if detail.groups().contains(&rel_br_grp_id) {
+            break;
+        }
+
+        // check if this instruction is a call
+        let jmp_grp_id = InsnGroupId(InsnGroupType::CS_GRP_JUMP.try_into().unwrap());
+        if detail.groups().contains(&jmp_grp_id) {
+            // if a register wasn't read, it's a direct jump, which can't exist
+            // in the middle of a gadget
+            if detail.regs_read().len() == 0 {
+                break;
+            // if a register was read, and terminating jumps are allowed,
+            // terminate the gadget
+            } else if constraints.allow_terminating_jmp {
+                // if the gadget length is valid, the gadget is valid
+                found_valid_gadget = is_valid_gadget_len(gadget_slices.len(), constraints);
+                break;
+            }
+        }
+
+        // check if this instruction is a call
+        let call_grp_id = InsnGroupId(InsnGroupType::CS_GRP_CALL.try_into().unwrap());
+        if detail.groups().contains(&call_grp_id) {
+            // if a register wasn't read, it's a direct call, which can't exist
+            // in the middle of a gadget
+            if detail.regs_read().len() == 0 {
+                break;
+            // if a register was read, and terminating calls are allowed,
+            // terminate the gadget
+            } else if constraints.allow_terminating_call {
+                // if the gadget length is valid, the gadget is valid
+                found_valid_gadget = is_valid_gadget_len(gadget_slices.len(), constraints);
+                break;
+            }
+        }
+
+        // if terminating rets are allowed, check if this instruction is a ret
+        // and terminates the gadget
         let ret_grp_id = InsnGroupId(InsnGroupType::CS_GRP_RET.try_into().unwrap());
-        if cs.insn_detail(insn).unwrap().groups().contains(&ret_grp_id) {
-            found_gadget = true;
+        if constraints.allow_terminating_ret && detail.groups().contains(&ret_grp_id) {
+            // if the gadget length is valid, the gadget is valid
+            found_valid_gadget = is_valid_gadget_len(gadget_slices.len(), constraints);
             break;
         }
     }
@@ -173,7 +225,7 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture) -> 
     std::mem::drop(cs);
 
     // if we found a gadget
-    if found_gadget {
+    if found_valid_gadget {
         return Some((addr, gadget_slices));
     }
 
@@ -181,10 +233,45 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture) -> 
     None
 }
 
+// get_gadget_mnemonic() returns an owned string representing the concatenated
+// mnemonics of the provided gadget bytes
+fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: object::Architecture) -> String {
+    // init capstone and use it to do the disassembly
+    let cs: Capstone = init_capstone(arch, false).unwrap();
+    let insns = cs.disasm_all(gadget_bytes, gadget_addr as u64)
+                .expect("Capstone failed disassembly!");
+    
+    // TODO(garnt): reconsider memory leak
+
+    // iterate over the provided instructions, looking for a gadget-terminating
+    // instruction to end the sequence.
+    insns
+        .iter()
+        .map(|insn| {
+            // grab an owned copy of the operand's mnemonic
+            let mut mnemonic: String = insn.mnemonic().unwrap().to_owned();
+            // append the operand string if it exists
+            if let Some(op_str) = insn.op_str() {
+                mnemonic += " ";
+                mnemonic += op_str;
+            }
+            mnemonic
+        })
+        .reduce(|acc, str| format!("{acc}; {str}"))
+        .unwrap_or_default()
+}
+
 // main() is the entrypoint.
 fn main() -> Result<(), IGError> {
-    // parse cli args
+    // parse cli args and gadget constraints
     let cli_args = CLIArgs::parse();
+    let gadget_constraints = GadgetConstraints::from_cli_args(&cli_args);
+
+    // compile regex and put it in a Mutex
+    let regex_mtx: Mutex<Regex> = match &cli_args.regex_str {
+        Some(reg_str) =>Mutex::new(Regex::new(&reg_str).expect("Failed to compile regex!")),
+        None => Mutex::new(Regex::new(r"^$").expect("Failed to compile regex!")),
+    };
 
     // read the binary file into memory, then parse it
     let bin_data = std::fs::read(cli_args.bin_path).unwrap();
@@ -257,7 +344,8 @@ fn main() -> Result<(), IGError> {
             .map(|ofs_range| find_gadget(
                 &seg_bytes[ofs_range.0..ofs_range.1],
                 ofs_range.0 + segment.address() as usize,
-                bin_arch
+                bin_arch,
+                gadget_constraints
             ))
             // filter out None results
             .flatten()
@@ -293,14 +381,46 @@ fn main() -> Result<(), IGError> {
             println!("{} unique gadgets in segment", gadgets.len());
         }
 
-        // print the first 10 gadgets
+        // setup progress bar style for mnemonic-finding
+        let mnemonic_bar_style = indicatif::ProgressStyle::with_template("Fetching gadget mnemonics: {bar} [{pos}/{len} ({percent}%)] ({elapsed})").unwrap();
+
+        // generate mnemonic strings for gadgets
+        let mnemonics: Vec<(String, &[usize])> = gadgets
+            // iterate over the start addresses, parallelizing with rayon
+            .par_iter()
+            // render the status bar we've prepared, updating as we go
+            .progress_with_style(mnemonic_bar_style)
+            // actually disassemble and attempt to find a gadget
+            .map(|pair| {
+                (get_gadget_mnemonic(pair.0.as_ref(), pair.1[0], bin_arch), pair.1)
+            })
+            // filter mnemonics using regex
+            .filter(|pair| {
+                // only bother with the regex if the regex object exists
+                if (&cli_args.regex_str).is_some() {
+                    let regex_obj = regex_mtx.lock().unwrap();
+                    return regex_obj.is_match(&pair.0)
+                // if there's no regex object, just yield everything
+                } else {
+                    return true;
+                }
+            })
+            .collect();
+
+        // if we used a regex, print the number of gadgets remaining after
+        // applying it.
+        if (&cli_args.regex_str).is_some() {
+            if let Some(name) = seg_name {
+                println!("{} unique gadgets in {} after filtering", mnemonics.len(), name);
+            } else {
+                println!("{} unique gadgets in segment after filtering", mnemonics.len());
+            }
+        }
+
+        // print the first 10 mnemonics
         /*for i in 0..10 {
-            println!("gadget: {:02x?} @{:02x?}", gadgets[i].0, gadgets[i].1);
+            println!("{:02x?}: {}", mnemonics[i].1, mnemonics[i].0);
         }*/
-
-        // TODO(garnt): generate mnemonic strings for gadgets
-
-        // TODO(garnt): filter via regex
     }
 
     // Return something to satiate the compiler

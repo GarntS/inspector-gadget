@@ -30,7 +30,7 @@ struct TreeNode {
     start_addrs: Vec<usize>,
 }
 
-// impl for GadgetTree
+// GadgetTree method impls
 impl GadgetTree {
     // new() constructs a new, empty, GadgetTree
     pub fn new() -> Self {
@@ -87,7 +87,7 @@ impl GadgetTree {
     }
 }
 
-// impl for TreeNode
+// TreeNode method impls
 impl TreeNode {
     // walk_gadgets() recursively walks this TreeNode and returns a vec of pairs
     // of (byte_str, <slice of start addresses>) for each unique gadget.
