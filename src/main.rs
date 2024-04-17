@@ -5,14 +5,16 @@
  */
 
 mod cli_args;
+mod gadget_tree;
 mod ig_error;
 
 use capstone::{Capstone, InsnGroupId, InsnGroupType};
 use capstone::arch::{self, BuildsCapstone, BuildsCapstoneSyntax};
 use clap::Parser;
 use cli_args::CLIArgs;
+use gadget_tree::GadgetTree;
 use ig_error::IGError;
-use indicatif::ParallelProgressIterator;
+use indicatif::{ParallelProgressIterator, ProgressIterator};
 use object::{Object, ObjectSegment};
 use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
 use std::sync::Arc;
@@ -139,7 +141,7 @@ fn valid_gadget_start_addrs(segment: &object::Segment, arch: object::Architectur
 
 // find_gadget() finds a single gadget and returns the string representation
 // of its mnemonics if one is found.
-fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture) -> Option<(usize, usize)> {
+fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture) -> Option<(usize, Vec<&[u8]>)> {
     // init capstone
     let cs: Capstone = init_capstone(arch).unwrap();
 
@@ -149,19 +151,33 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture) -> 
     
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
-    let mut gadget_len: usize = 0;
+    let mut found_gadget: bool = false;
+    let mut gadget_slices: Vec<&[u8]> = Vec::new();
     for insn in insns.as_ref() {
         // update gadget_len
-        gadget_len += insn.len();
+        let start_ofs: usize = insn.address() as usize - addr;
+        let end_ofs: usize = start_ofs + (insn.len() as usize);
+        gadget_slices.push(&search_bytes[start_ofs..end_ofs]);
 
         // check if previous instruction's id was a terminating instruction
         let ret_grp_id = InsnGroupId(InsnGroupType::CS_GRP_RET.try_into().unwrap());
         if cs.insn_detail(insn).unwrap().groups().contains(&ret_grp_id) {
-            return Some((addr, addr + gadget_len));
+            found_gadget = true;
+            break;
         }
     }
 
-    // if we got here, we didn't find a gadget, so return None
+    // TODO(garnt): reconsider memory leak
+    // explicitly drop the capstone disassembler and instructions objects
+    std::mem::drop(insns);
+    std::mem::drop(cs);
+
+    // if we found a gadget
+    if found_gadget {
+        return Some((addr, gadget_slices));
+    }
+
+    // if we didn't find a gadget, return None
     None
 }
 
@@ -217,11 +233,11 @@ fn main() -> Result<(), IGError> {
         // setup progress bar style
         let seg_name = segment.name().unwrap();
         let mut bar_str: String = match seg_name {
-            Some(name) => format!("Parsing gadgets for segment {}: ", name),
-            None => "Parsing gadgets for segment: ".to_owned(),
+            Some(name) => format!("Finding all gadgets in segment {}: ", name),
+            None => "Finding all gadgets in segment: ".to_owned(),
         };
         bar_str += "{bar} [{pos}/{len} ({percent}%)] ({elapsed})";
-        let style = indicatif::ProgressStyle::with_template(&bar_str).unwrap();
+        let search_style = indicatif::ProgressStyle::with_template(&bar_str).unwrap();
 
         // grab a copy of the segment contents we can slice up
         let seg_bytes: Arc<[u8]> = segment.data().unwrap().into();
@@ -229,17 +245,17 @@ fn main() -> Result<(), IGError> {
         // find all valid gadget start addresses within the segment, then
         // actually do the gadget search.
         let gadget_starts = valid_gadget_start_addrs(&segment, bin_arch);
-        let gadgets: Vec<(usize, usize)> = gadget_starts
+        let mut single_gadgets: Vec<(usize, Vec<&[u8]>)> = gadget_starts
             // iterate over the start addresses, parallelizing with rayon
             .par_iter()
             // render the status bar we've prepared, updating as we go
-            .progress_with_style(style)
+            .progress_with_style(search_style)
             // turn start addresses into offsets into the segment, then map
             // each start offset to an end offset.
             .map(|start_addr| (start_addr - (segment.address() as usize), seg_bytes.len().min(start_addr + (max_insn_len_bytes * cli_args.max_insns) - (segment.address() as usize))))
             // actually disassemble and attempt to find a gadget
             .map(|ofs_range| find_gadget(
-                &seg_bytes.clone()[ofs_range.0..ofs_range.1],
+                &seg_bytes[ofs_range.0..ofs_range.1],
                 ofs_range.0 + segment.address() as usize,
                 bin_arch
             ))
@@ -247,14 +263,44 @@ fn main() -> Result<(), IGError> {
             .flatten()
             .collect();
 
-        // TODO(garnt): filter via regex
-
+        // keep track of how many gadgets we found for sanity-checking later
+        let single_gadgets_len: usize = single_gadgets.len();
+        
         // print the number of gadgets
         if let Some(name) = seg_name {
-            println!("{} gadgets in {}", gadgets.len(), name);
+            println!("{} gadgets in {}", single_gadgets.len(), name);
         } else {
-            println!("{} gadgets in segment", gadgets.len());
+            println!("{} gadgets in segment", single_gadgets.len());
         }
+
+        // populate a tree from the gadgets so we can deduplicate them
+        let tree_style = indicatif::ProgressStyle::with_template("Constructing dedup tree: {bar} [{pos}/{len} ({percent}%)] ({elapsed})").unwrap();
+        let mut gadget_tree: GadgetTree = GadgetTree::new();
+        for gadget in single_gadgets.iter_mut().progress_with_style(tree_style) {
+            gadget_tree.insert(&mut gadget.1, gadget.0);
+        }
+        assert_eq!(single_gadgets_len, gadget_tree.size());
+
+        // walk the tree to get a list of unique gadgets and their start addrs
+        let gadgets = gadget_tree.walk_gadgets();
+        let n_walked: usize = gadgets.iter().map(|pair| pair.1.len()).sum();
+        assert_eq!(single_gadgets_len, n_walked);
+
+        // print the number of unique gadgets
+        if let Some(name) = seg_name {
+            println!("{} unique gadgets in {}", gadgets.len(), name);
+        } else {
+            println!("{} unique gadgets in segment", gadgets.len());
+        }
+
+        // print the first 10 gadgets
+        /*for i in 0..10 {
+            println!("gadget: {:02x?} @{:02x?}", gadgets[i].0, gadgets[i].1);
+        }*/
+
+        // TODO(garnt): generate mnemonic strings for gadgets
+
+        // TODO(garnt): filter via regex
     }
 
     // Return something to satiate the compiler
