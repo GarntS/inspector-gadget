@@ -4,7 +4,7 @@
     desc:       Entrypoint for inspector_gadget.
  */
 
-mod capstone_utils;
+mod capstone_tools;
 mod cli_args;
 mod gadget_tree;
 mod ig_error;
@@ -19,9 +19,7 @@ use object::{Object, ObjectSegment};
 use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
 use regex::Regex;
 use std::sync::{Arc, Mutex};
-use capstone_utils::{is_terminating_insn, GadgetSearchInsnInfo};
-// TODO(garnt): remove
-use capstone_utils::{DIR_CALL_COUNT, DIR_JMP_COUNT, REL_BR_COUNT, RET_COUNT};
+use capstone_tools::{is_terminating_insn, GadgetSearchInsnInfo};
 
 // is_valid_gadget_len() returns true if a gadget length is valid given the
 // passed GadgetConstraints object.
@@ -43,8 +41,8 @@ fn is_valid_gadget_len(n_insns: usize, constraints: GadgetConstraints) -> bool {
 // of its mnemonics if one is found.
 fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, endianness: object::Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
     // init capstone and use it to do the disassembly
-    let cs: Capstone = capstone_utils::init_capstone(arch, endianness, true).unwrap();
-    let cs_arch = capstone_utils::object_arch_to_cs_arch(arch).unwrap();
+    let cs: Capstone = capstone_tools::init_capstone(arch, endianness, true).unwrap();
+    let cs_arch = capstone_tools::object_arch_to_cs_arch(arch).unwrap();
     let insns = cs.disasm_all(search_bytes, addr as u64)
                 .expect("Capstone failed disassembly!");
 
@@ -92,7 +90,7 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, end
 // mnemonics of the provided gadget bytes
 fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: object::Architecture, endianness: object::Endianness) -> String {
     // init capstone and use it to do the disassembly
-    let cs: Capstone = capstone_utils::init_capstone(arch, endianness, false).unwrap();
+    let cs: Capstone = capstone_tools::init_capstone(arch, endianness, false).unwrap();
     let insns = cs.disasm_all(gadget_bytes, gadget_addr as u64)
                 .expect("Capstone failed disassembly!");
     
@@ -134,19 +132,19 @@ fn main() -> Result<(), IGError> {
     let bin_arch = bin_file.architecture();
     let bin_endianness = bin_file.endianness();
     println!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
-    if !Capstone::supports_arch(capstone_utils::object_arch_to_cs_arch(bin_arch).unwrap()) {
+    if !Capstone::supports_arch(capstone_tools::object_arch_to_cs_arch(bin_arch).unwrap()) {
         // TODO(garnt): remove if riscv supports_arch() bug gets fixed
         // there's a bug with Capstone::supports_arch() where it returns false
         // even if the underlying capstone library is compiled with riscv
         // support. For the time being, if the arch is RISCV, don't raise the
         // error.
-        if capstone_utils::object_arch_to_cs_arch(bin_arch).unwrap() != capstone::Arch::RISCV {
+        if capstone_tools::object_arch_to_cs_arch(bin_arch).unwrap() != capstone::Arch::RISCV {
             return Err(IGError::new("Underlying capstone library doesn't support arch!"))
         }
     }
 
     // grab the max instruction length, in bytes, for the correct arch
-    let max_insn_len_bytes: usize = match capstone_utils::object_arch_to_cs_arch(bin_arch) {
+    let max_insn_len_bytes: usize = match capstone_tools::object_arch_to_cs_arch(bin_arch) {
         // arm/aarch64/ppc/mips/risc-v are all fixed 4-byte instructions
         Some(capstone::Arch::ARM)
         | Some(capstone::Arch::ARM64)
@@ -203,7 +201,7 @@ fn main() -> Result<(), IGError> {
 
         // find all valid gadget start addresses within the segment, then
         // actually do the gadget search.
-        let gadget_starts = capstone_utils::valid_gadget_start_addrs(&segment, bin_arch);
+        let gadget_starts = capstone_tools::valid_gadget_start_addrs(&segment, bin_arch);
         // TODO(garnt): remove
         println!("gadget_starts len: {}", gadget_starts.len());
         let mut single_gadgets: Vec<(usize, Vec<&[u8]>)> = gadget_starts
@@ -225,12 +223,6 @@ fn main() -> Result<(), IGError> {
             // filter out None results
             .flatten()
             .collect();
-
-        // TODO(garnt): remove
-        println!("REL_BR_COUNT: {}", REL_BR_COUNT.load(std::sync::atomic::Ordering::Relaxed));
-        println!("DIR_JMP_COUNT: {}", DIR_JMP_COUNT.load(std::sync::atomic::Ordering::Relaxed));
-        println!("DIR_CALL_COUNT: {}", DIR_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed));
-        println!("RET_COUNT: {}", RET_COUNT.load(std::sync::atomic::Ordering::Relaxed));
 
         // keep track of how many gadgets we found for sanity-checking later
         let single_gadgets_len: usize = single_gadgets.len();

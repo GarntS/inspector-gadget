@@ -1,7 +1,7 @@
-/*  file:       capstone_utils.rs
+/*  file:       capstone_tools.rs
     author:     garnt
     date:       04/17/2024
-    desc:       Entrypoint for inspector_gadget.
+    desc:       Some functions used for interacting with capstone.
  */
 
 use capstone::{Capstone, InsnGroupId, InsnGroupType, InsnId};
@@ -179,12 +179,6 @@ pub fn valid_gadget_start_addrs(segment: &object::Segment, arch: object::Archite
         .collect()
 }
 
-// TODO(garnt): remove
-pub static REL_BR_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static DIR_JMP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static DIR_CALL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static RET_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 // GadgetSearchInsnInfo contains information about whether the current
 // instruction would terminate a gadget search, and if the resulting gadget
 // remains valid.
@@ -204,7 +198,6 @@ const PPC_BLR_ID: InsnId = InsnId(PpcInsn::PPC_INS_BLR as u32);
 fn is_terminating_insn_ppc(insn: &capstone::Insn, detail: &capstone::InsnDetail, constraints: &GadgetConstraints) -> GadgetSearchInsnInfo {
     // relative branches are always direct jumps and therefore not allowed
     if detail.groups().contains(&REL_BR_GRP_ID) {
-        REL_BR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return GadgetSearchInsnInfo {
             is_terminating: true,
             is_valid_gadget: false
@@ -213,7 +206,6 @@ fn is_terminating_insn_ppc(insn: &capstone::Insn, detail: &capstone::InsnDetail,
 
     // check to see if this instruction is a ret
     if constraints.allow_terminating_ret && insn.id() == PPC_BLR_ID {
-        RET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return GadgetSearchInsnInfo {
             is_terminating: true,
             is_valid_gadget: true,
@@ -225,7 +217,6 @@ fn is_terminating_insn_ppc(insn: &capstone::Insn, detail: &capstone::InsnDetail,
         // if a register wasn't read, it's a direct call, which can't exist
         // in the middle of a gadget
         if detail.regs_read().len() == 0 {
-            DIR_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return GadgetSearchInsnInfo {
                 is_terminating: true,
                 is_valid_gadget: false
@@ -248,7 +239,6 @@ fn is_terminating_insn_ppc(insn: &capstone::Insn, detail: &capstone::InsnDetail,
             // if a register wasn't read and there's no immediate, which
             // would be stored in the op_str, it's a direct jump
             if insn.op_str().is_none() {
-                DIR_JMP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return GadgetSearchInsnInfo {
                     is_terminating: true,
                     is_valid_gadget: false
@@ -280,7 +270,6 @@ fn is_terminating_insn_riscv(insn: &capstone::Insn, detail: &capstone::InsnDetai
 
     // relative branches are always direct jumps and therefore not allowed
     if detail.groups().contains(&REL_BR_GRP_ID) {
-        REL_BR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return GadgetSearchInsnInfo {
             is_terminating: true,
             is_valid_gadget: false
@@ -293,7 +282,6 @@ fn is_terminating_insn_riscv(insn: &capstone::Insn, detail: &capstone::InsnDetai
     // so check for both
     if constraints.allow_terminating_ret {
         if insn.bytes() == b"\x82\x80" || insn.bytes() == b"\x67\x80\x00\x00" {
-            RET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return GadgetSearchInsnInfo {
                 is_terminating: true,
                 is_valid_gadget: true,
@@ -306,7 +294,6 @@ fn is_terminating_insn_riscv(insn: &capstone::Insn, detail: &capstone::InsnDetai
         // if a register wasn't read, it's a direct call, which can't exist
         // in the middle of a gadget
         if detail.regs_read().len() == 0 {
-            DIR_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return GadgetSearchInsnInfo {
                 is_terminating: true,
                 is_valid_gadget: false
@@ -329,7 +316,6 @@ fn is_terminating_insn_riscv(insn: &capstone::Insn, detail: &capstone::InsnDetai
             // if a register wasn't read and there's no immediate, which
             // would be stored in the op_str, it's a direct jump
             if insn.op_str().is_none() {
-                DIR_JMP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return GadgetSearchInsnInfo {
                     is_terminating: true,
                     is_valid_gadget: false
@@ -365,7 +351,6 @@ fn is_terminating_insn_sysz(insn: &capstone::Insn, detail: &capstone::InsnDetail
     // return addrs in the sysz calling convention are stored in r14, so ret is:
     // br r14. check for that opcode
     if constraints.allow_terminating_ret && insn.bytes() == b"\x07\xfe" {
-        RET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return GadgetSearchInsnInfo {
             is_terminating: true,
             is_valid_gadget: true,
@@ -377,7 +362,6 @@ fn is_terminating_insn_sysz(insn: &capstone::Insn, detail: &capstone::InsnDetail
         // relative branches
         SYSZ_BAL_ID
         | SYSZ_BAS_ID => {
-            REL_BR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return GadgetSearchInsnInfo {
                 is_terminating: true,
                 is_valid_gadget: false
@@ -389,7 +373,6 @@ fn is_terminating_insn_sysz(insn: &capstone::Insn, detail: &capstone::InsnDetail
             // if a register wasn't read, it's a direct call, which can't exist
             // in the middle of a gadget
             if detail.regs_read().len() == 0 {
-                DIR_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return GadgetSearchInsnInfo {
                     is_terminating: true,
                     is_valid_gadget: false
@@ -431,7 +414,6 @@ pub fn is_terminating_insn(insn: &capstone::Insn, detail: &capstone::InsnDetail,
         _ => {
             // relative branches are always direct jumps and therefore not allowed
             if detail.groups().contains(&REL_BR_GRP_ID) {
-                REL_BR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return GadgetSearchInsnInfo {
                     is_terminating: true,
                     is_valid_gadget: false
@@ -442,7 +424,6 @@ pub fn is_terminating_insn(insn: &capstone::Insn, detail: &capstone::InsnDetail,
             // and terminates the gadget
             if constraints.allow_terminating_ret && detail.groups().contains(&RET_GRP_ID) {
                 // if the gadget length is valid, the gadget is valid
-                RET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return GadgetSearchInsnInfo {
                     is_terminating: true,
                     is_valid_gadget: true
@@ -454,7 +435,6 @@ pub fn is_terminating_insn(insn: &capstone::Insn, detail: &capstone::InsnDetail,
                 // if a register wasn't read, it's a direct call, which can't exist
                 // in the middle of a gadget
                 if detail.regs_read().len() == 0 {
-                    DIR_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return GadgetSearchInsnInfo {
                         is_terminating: true,
                         is_valid_gadget: false
@@ -477,7 +457,6 @@ pub fn is_terminating_insn(insn: &capstone::Insn, detail: &capstone::InsnDetail,
                     // if a register wasn't read and there's no immediate, which
                     // would be stored in the op_str, it's a direct jump
                     if insn.op_str().is_none() {
-                        DIR_JMP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         return GadgetSearchInsnInfo {
                             is_terminating: true,
                             is_valid_gadget: false
