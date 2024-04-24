@@ -64,7 +64,9 @@ impl GadgetTree {
         let cur_insn_bytes: &[u8] = gadget.pop().unwrap();
 
         // if a child matches the current instruction, recurse
-        if let Some(matching_child) = self.roots.iter_mut().find(|child| child.instr_bytes.as_ref() == cur_insn_bytes) {
+        if let Some(matching_child) = self.roots
+            .iter_mut()
+            .find(|child| child.instr_bytes.as_ref() == cur_insn_bytes) {
             matching_child.insert(gadget, slice::from_ref(&addr));
             return self.n_gadgets
         // otherwise, 
@@ -100,7 +102,10 @@ impl TreeNode {
         // create a vec to store gadgets in
         let mut gadgets: Vec<(Vec<u8>, &[usize])> = Vec::new();
         if !self.start_addrs.is_empty() {
-            gadgets.push((self.instr_bytes.clone().to_vec(), self.start_addrs.as_slice()));
+            gadgets.push((
+                self.instr_bytes.clone().to_vec(),
+                self.start_addrs.as_slice()
+            ));
         }
 
         // otherwise, iterate over the child nodes in parallel
@@ -114,7 +119,8 @@ impl TreeNode {
                 pair.0.extend_from_slice(&self.instr_bytes);
                 pair
             })
-            .collect());
+            .collect()
+        );
 
         // return the list of gadgets
         gadgets
@@ -135,7 +141,9 @@ impl TreeNode {
         let cur_insn_bytes: &[u8] = gadget.pop().unwrap();
 
         // if a child matches the current instruction, recurse
-        if let Some(matching_child) = self.children.iter_mut().find(|child| child.instr_bytes.as_ref() == cur_insn_bytes) {
+        if let Some(matching_child) = self.children
+                .iter_mut()
+                .find(|child| child.instr_bytes.as_ref() == cur_insn_bytes) {
             matching_child.insert(gadget, addrs);
             return
         } else {

@@ -4,12 +4,12 @@
     desc:       Entrypoint for inspector_gadget.
  */
 
+mod capstone_utils;
 mod cli_args;
 mod gadget_tree;
 mod ig_error;
 
-use capstone::{Capstone, InsnGroupId, InsnGroupType};
-use capstone::arch::{self, BuildsCapstone, BuildsCapstoneSyntax};
+use capstone::Capstone;
 use clap::Parser;
 use cli_args::{CLIArgs, GadgetConstraints};
 use gadget_tree::GadgetTree;
@@ -19,120 +19,9 @@ use object::{Object, ObjectSegment};
 use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
 use regex::Regex;
 use std::sync::{Arc, Mutex};
-
-// object_arch_to_cs_arch() returns the corresponding capstone::arch enum value
-// for the provided object::Architecture enum value.
-fn object_arch_to_cs_arch(arch: object::Architecture) -> Option<capstone::Arch> {
-    match arch {
-        // aarch64
-        object::Architecture::Aarch64 | object::Architecture::Aarch64_Ilp32 => Some(capstone::Arch::ARM64),
-        // arm32
-        object::Architecture::Arm => Some(capstone::Arch::ARM),
-        // x86/x86_64
-        object::Architecture::I386 | object::Architecture::X86_64 | object::Architecture::X86_64_X32 => Some(capstone::Arch::X86),
-        // ppc
-        object::Architecture::PowerPc | object::Architecture::PowerPc64 => Some(capstone::Arch::PPC),
-        // mips
-        object::Architecture::Mips | object::Architecture::Mips64 => Some(capstone::Arch::MIPS),
-        // risc-v
-        object::Architecture::Riscv32 | object::Architecture::Riscv64 => Some(capstone::Arch::RISCV),
-        // sparc
-        object::Architecture::Sparc64 => Some(capstone::Arch::SPARC),
-        // default to None
-        _ => None
-    }
-}
-
-// init_capstone() constructs a Capstone object for the correct arch
-fn init_capstone(arch: object::Architecture, enable_detail: bool) -> Result<Capstone, IGError> {
-    match arch {
-        object::Architecture::Aarch64 => Ok(Capstone::new()
-            .arm64()
-            .mode(arch::arm64::ArchMode::Arm)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for arm64!")),
-        object::Architecture::Arm => Ok(Capstone::new()
-            .arm()
-            .mode(arch::arm::ArchMode::Arm)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for arm!")),
-        object::Architecture::Mips64 => Ok(Capstone::new()
-            .mips()
-            .mode(arch::mips::ArchMode::Mips64)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for mips64!")),
-        object::Architecture::Mips => Ok(Capstone::new()
-            .mips()
-            .mode(arch::mips::ArchMode::Mips32)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for mips!")),
-        object::Architecture::PowerPc64 => Ok(Capstone::new()
-            .ppc()
-            .mode(arch::ppc::ArchMode::Mode64)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for powerpc64!")),
-        object::Architecture::PowerPc => Ok(Capstone::new()
-            .ppc()
-            .mode(arch::ppc::ArchMode::Mode32)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for powerpc32!")),
-        object::Architecture::X86_64 | object::Architecture::X86_64_X32 => Ok(Capstone::new()
-            .x86()
-            .mode(arch::x86::ArchMode::Mode64)
-            .syntax(arch::x86::ArchSyntax::Intel)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for x86(_64)!")),
-        object::Architecture::I386 => Ok(Capstone::new()
-            .x86()
-            .mode(arch::x86::ArchMode::Mode32)
-            .syntax(arch::x86::ArchSyntax::Intel)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for x86(_64)!")),
-        object::Architecture::Sparc64 => Ok(Capstone::new()
-            .sparc()
-            .mode(arch::sparc::ArchMode::Default)
-            .detail(enable_detail)
-            .build()
-            .expect("Failed to create Capstone object for sparc!")),
-        _ => Err(IGError::new("Unexpected architecture!"))
-    }
-}
-
-// valid_gadget_start_addrs() returns an owned vec<usize> of all the valid
-// start addresses for a gadget within the given segment.
-fn valid_gadget_start_addrs(segment: &object::Segment, arch: object::Architecture) -> Vec<usize> {
-    // grab segment start and end addrs
-    let segment_start_addr: usize = segment.address() as usize;
-    let segment_end_addr: usize = segment_start_addr + segment.size() as usize;
-
-    // figure out the valid instruction alignment for this arch
-    let instr_alignment: usize = match object_arch_to_cs_arch(arch).unwrap() {
-        // arm/aarch64/ppc/mips/risc-v are 4-byte aligned
-        capstone::Arch::ARM
-        | capstone::Arch::ARM64
-        | capstone::Arch::PPC
-        | capstone::Arch::MIPS
-        | capstone::Arch::RISCV 
-        | capstone::Arch::SPARC => 4,
-        // x86/x86_64 aren't aligned
-        capstone::Arch::X86 => 1,
-        // default to None
-        _ => 0
-    };
-
-    // iterate over the valid start addresses and return a vec containing them
-    (segment_start_addr..(segment_end_addr + 1))
-        .step_by(instr_alignment)
-        .collect()
-}
+use capstone_utils::{is_terminating_insn, GadgetSearchInsnInfo};
+// TODO(garnt): remove
+use capstone_utils::{DIR_CALL_COUNT, DIR_JMP_COUNT, REL_BR_COUNT, RET_COUNT};
 
 // is_valid_gadget_len() returns true if a gadget length is valid given the
 // passed GadgetConstraints object.
@@ -152,12 +41,13 @@ fn is_valid_gadget_len(n_insns: usize, constraints: GadgetConstraints) -> bool {
 
 // find_gadget() finds a single gadget and returns the string representation
 // of its mnemonics if one is found.
-fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
+fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, endianness: object::Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
     // init capstone and use it to do the disassembly
-    let cs: Capstone = init_capstone(arch, true).unwrap();
+    let cs: Capstone = capstone_utils::init_capstone(arch, endianness, true).unwrap();
+    let cs_arch = capstone_utils::object_arch_to_cs_arch(arch).unwrap();
     let insns = cs.disasm_all(search_bytes, addr as u64)
                 .expect("Capstone failed disassembly!");
-    
+
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
     let mut found_valid_gadget: bool = false;
@@ -170,51 +60,16 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, con
 
         // grab this instruction's groups
         let detail = cs.insn_detail(insn).unwrap();
-
-        // relative branches are always direct jumps and therefore not allowed
-        let rel_br_grp_id = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE.try_into().unwrap());
-        if detail.groups().contains(&rel_br_grp_id) {
-            break;
-        }
-
-        // check if this instruction is a call
-        let jmp_grp_id = InsnGroupId(InsnGroupType::CS_GRP_JUMP.try_into().unwrap());
-        if detail.groups().contains(&jmp_grp_id) {
-            // if a register wasn't read, it's a direct jump, which can't exist
-            // in the middle of a gadget
-            if detail.regs_read().len() == 0 {
-                break;
-            // if a register was read, and terminating jumps are allowed,
-            // terminate the gadget
-            } else if constraints.allow_terminating_jmp {
-                // if the gadget length is valid, the gadget is valid
-                found_valid_gadget = is_valid_gadget_len(gadget_slices.len(), constraints);
-                break;
-            }
-        }
-
-        // check if this instruction is a call
-        let call_grp_id = InsnGroupId(InsnGroupType::CS_GRP_CALL.try_into().unwrap());
-        if detail.groups().contains(&call_grp_id) {
-            // if a register wasn't read, it's a direct call, which can't exist
-            // in the middle of a gadget
-            if detail.regs_read().len() == 0 {
-                break;
-            // if a register was read, and terminating calls are allowed,
-            // terminate the gadget
-            } else if constraints.allow_terminating_call {
-                // if the gadget length is valid, the gadget is valid
-                found_valid_gadget = is_valid_gadget_len(gadget_slices.len(), constraints);
-                break;
-            }
-        }
-
-        // if terminating rets are allowed, check if this instruction is a ret
-        // and terminates the gadget
-        let ret_grp_id = InsnGroupId(InsnGroupType::CS_GRP_RET.try_into().unwrap());
-        if constraints.allow_terminating_ret && detail.groups().contains(&ret_grp_id) {
-            // if the gadget length is valid, the gadget is valid
+        let GadgetSearchInsnInfo {is_terminating, is_valid_gadget} = is_terminating_insn(insn, &detail, cs_arch, constraints);
+    
+        // if this insn is terminating and the gadget is still valid, stop
+        // searching and return it if its length is ok.
+        if is_terminating && is_valid_gadget {
             found_valid_gadget = is_valid_gadget_len(gadget_slices.len(), constraints);
+            break;
+        // otherwise, if the insn is terminating or the gadget is invalid, stop
+        // searching and return none.
+        } else if is_terminating || !is_valid_gadget {
             break;
         }
     }
@@ -235,14 +90,12 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, con
 
 // get_gadget_mnemonic() returns an owned string representing the concatenated
 // mnemonics of the provided gadget bytes
-fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: object::Architecture) -> String {
+fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: object::Architecture, endianness: object::Endianness) -> String {
     // init capstone and use it to do the disassembly
-    let cs: Capstone = init_capstone(arch, false).unwrap();
+    let cs: Capstone = capstone_utils::init_capstone(arch, endianness, false).unwrap();
     let insns = cs.disasm_all(gadget_bytes, gadget_addr as u64)
                 .expect("Capstone failed disassembly!");
     
-    // TODO(garnt): reconsider memory leak
-
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
     insns
@@ -279,20 +132,31 @@ fn main() -> Result<(), IGError> {
 
     // grab the binary file's architecture and address size
     let bin_arch = bin_file.architecture();
-    if !Capstone::supports_arch(object_arch_to_cs_arch(bin_arch).unwrap()) {
-        return Err(IGError::new("Underlying capstone library doesn't support arch!"))
+    let bin_endianness = bin_file.endianness();
+    println!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
+    if !Capstone::supports_arch(capstone_utils::object_arch_to_cs_arch(bin_arch).unwrap()) {
+        // TODO(garnt): remove if riscv supports_arch() bug gets fixed
+        // there's a bug with Capstone::supports_arch() where it returns false
+        // even if the underlying capstone library is compiled with riscv
+        // support. For the time being, if the arch is RISCV, don't raise the
+        // error.
+        if capstone_utils::object_arch_to_cs_arch(bin_arch).unwrap() != capstone::Arch::RISCV {
+            return Err(IGError::new("Underlying capstone library doesn't support arch!"))
+        }
     }
 
     // grab the max instruction length, in bytes, for the correct arch
-    let max_insn_len_bytes: usize = match object_arch_to_cs_arch(bin_arch) {
-        // arm/aarch64/ppc/mips/risc-v are 4-byte aligned
+    let max_insn_len_bytes: usize = match capstone_utils::object_arch_to_cs_arch(bin_arch) {
+        // arm/aarch64/ppc/mips/risc-v are all fixed 4-byte instructions
         Some(capstone::Arch::ARM)
         | Some(capstone::Arch::ARM64)
         | Some(capstone::Arch::PPC)
         | Some(capstone::Arch::MIPS)
         | Some(capstone::Arch::RISCV)
         | Some(capstone::Arch::SPARC) => Some(4),
-        // x86/x86_64 aren't aligned
+        // s390x/sysz has 4/6/8-byte instructions
+        Some(capstone::Arch::SYSZ) => Some(8),
+        // x86/x86_64 has some long-ass instructions
         Some(capstone::Arch::X86) => Some(15),
         // default to None
         _ => None
@@ -304,12 +168,18 @@ fn main() -> Result<(), IGError> {
         // check if this section will be marked executable. if not, ignore it.
         if ! match segment.flags() {
             object::SegmentFlags::Coff { characteristics } => {
+                // todo(garnt): remove
+                println!("seg chars: {:x}", characteristics);
                 (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
             },
             object::SegmentFlags::Elf { p_flags, .. } => {
+                // todo(garnt): remove
+                println!("seg p_flags: {:x}", p_flags);
                 (p_flags & object::elf::PF_X) > 0
             },
             object::SegmentFlags::MachO { initprot, .. } => {
+                // todo(garnt): remove
+                println!("seg initprot: {:x}", initprot);
                 (initprot & object::macho::VM_PROT_EXECUTE) > 0
             },
             _ => false
@@ -317,6 +187,8 @@ fn main() -> Result<(), IGError> {
             continue;
         }
 
+        // TODO(garnt): remove
+        println!("seg len: {}", segment.size());
         // setup progress bar style
         let seg_name = segment.name().unwrap();
         let mut bar_str: String = match seg_name {
@@ -331,7 +203,9 @@ fn main() -> Result<(), IGError> {
 
         // find all valid gadget start addresses within the segment, then
         // actually do the gadget search.
-        let gadget_starts = valid_gadget_start_addrs(&segment, bin_arch);
+        let gadget_starts = capstone_utils::valid_gadget_start_addrs(&segment, bin_arch);
+        // TODO(garnt): remove
+        println!("gadget_starts len: {}", gadget_starts.len());
         let mut single_gadgets: Vec<(usize, Vec<&[u8]>)> = gadget_starts
             // iterate over the start addresses, parallelizing with rayon
             .par_iter()
@@ -345,11 +219,18 @@ fn main() -> Result<(), IGError> {
                 &seg_bytes[ofs_range.0..ofs_range.1],
                 ofs_range.0 + segment.address() as usize,
                 bin_arch,
+                bin_endianness,
                 gadget_constraints
             ))
             // filter out None results
             .flatten()
             .collect();
+
+        // TODO(garnt): remove
+        println!("REL_BR_COUNT: {}", REL_BR_COUNT.load(std::sync::atomic::Ordering::Relaxed));
+        println!("DIR_JMP_COUNT: {}", DIR_JMP_COUNT.load(std::sync::atomic::Ordering::Relaxed));
+        println!("DIR_CALL_COUNT: {}", DIR_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed));
+        println!("RET_COUNT: {}", RET_COUNT.load(std::sync::atomic::Ordering::Relaxed));
 
         // keep track of how many gadgets we found for sanity-checking later
         let single_gadgets_len: usize = single_gadgets.len();
@@ -392,7 +273,7 @@ fn main() -> Result<(), IGError> {
             .progress_with_style(mnemonic_bar_style)
             // actually disassemble and attempt to find a gadget
             .map(|pair| {
-                (get_gadget_mnemonic(pair.0.as_ref(), pair.1[0], bin_arch), pair.1)
+                (get_gadget_mnemonic(pair.0.as_ref(), pair.1[0], bin_arch, bin_endianness), pair.1)
             })
             // filter mnemonics using regex
             .filter(|pair| {
@@ -417,10 +298,11 @@ fn main() -> Result<(), IGError> {
             }
         }
 
+        // TODO(garnt): print em all
         // print the first 10 mnemonics
-        /*for i in 0..10 {
-            println!("{:02x?}: {}", mnemonics[i].1, mnemonics[i].0);
-        }*/
+        for mnemonic in mnemonics.iter().take(10) {
+            println!("{:02x?}: {}", mnemonic.1, mnemonic.0);
+        }
     }
 
     // Return something to satiate the compiler

@@ -254,6 +254,7 @@ name = "inspector_gadget"
 version = "0.1.0"
 dependencies = [
  "capstone",
+ "capstone-sys",
  "clap",
  "indicatif",
  "object",

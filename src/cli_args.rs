@@ -5,8 +5,7 @@
  */
 
 use clap::Parser;
-
-use crate::ig_error::IGError;
+use crate::IGError;
 
 // Struct to contain the clap-parsed arguments.
 #[derive(Parser, Debug)]
