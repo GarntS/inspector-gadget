@@ -5,19 +5,27 @@
  */
 
 use clap::Parser;
-use crate::IGError;
+use crate::arch::Arch;
 
 // Struct to contain the clap-parsed arguments.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, PartialEq)]
 #[command(version, about, long_about = None)]
+#[clap(rename_all = "kebab_case")]
 pub struct CLIArgs {
     // path to the binary file to search in
-    #[arg(short, long)]
     pub bin_path: String,
 
     // string containing regex to filter with
     #[arg(short, long)]
     pub regex_str: Option<String>,
+
+    // true if the input binary should be treated as a raw blob
+    #[arg(long, default_value_t = false)]
+    pub raw_binary: bool,
+
+    // override for input binary arch
+    #[arg(long, value_enum)]
+    pub arch: Option<Arch>,
 
     //
     // Below are fields that can be serialized into a GadgetConstraints struct.
@@ -78,20 +86,20 @@ impl GadgetConstraints {
 
     // is_valid() returns true if the provided GadgetConstraints can result in
     // valid gadgets.
-    pub fn is_valid(&self) -> Result<(), IGError> {
+    pub fn is_valid(&self) -> Result<(), String> {
         // if either n_insns bound is zero, it's invalid
         if self.min_insns == 0 || self.max_insns == 0 {
-            return Err(IGError::new("n_insns bounds cannot be 0!"));
+            return Err("n_insns bounds cannot be 0!".to_owned());
         }
 
         // if either min_insns is greater than max_insns, it's invalid
         if self.min_insns > self.max_insns {
-            return Err(IGError::new("max_insns must be greater than min_insns!"));
+            return Err("max_insns must be greater than min_insns!".to_owned());
         }
 
         // if no terminating instructions are specified, it's invalid
         if !self.allow_terminating_ret && !self.allow_terminating_call && !self.allow_terminating_jmp {
-            return Err(IGError::new("at least one terminating instruction must be allowed!"));
+            return Err("at least one terminating instruction must be allowed!".to_owned());
         }
 
         // default is valid

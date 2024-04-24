@@ -8,8 +8,6 @@ use capstone::{Capstone, InsnGroupId, InsnGroupType, InsnId};
 use capstone::arch::{self, BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode, BuildsCapstoneSyntax};
 use capstone::arch::ppc::PpcInsn;
 use crate::cli_args::GadgetConstraints;
-use crate::IGError;
-use object::ObjectSegment;
 
 // constant-valued Capstone group IDS
 pub const JMP_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_JUMP as u8);
@@ -17,33 +15,8 @@ pub const CALL_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_CALL as u
 pub const RET_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_RET as u8);
 pub const REL_BR_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE as u8);
 
-// object_arch_to_cs_arch() returns the corresponding capstone::arch enum value
-// for the provided object::Architecture enum value.
-pub fn object_arch_to_cs_arch(arch: object::Architecture) -> Option<capstone::Arch> {
-    match arch {
-        // aarch64
-        object::Architecture::Aarch64 | object::Architecture::Aarch64_Ilp32 => Some(capstone::Arch::ARM64),
-        // arm32
-        object::Architecture::Arm => Some(capstone::Arch::ARM),
-        // x86/x86_64
-        object::Architecture::I386 | object::Architecture::X86_64 | object::Architecture::X86_64_X32 => Some(capstone::Arch::X86),
-        // ppc
-        object::Architecture::PowerPc | object::Architecture::PowerPc64 => Some(capstone::Arch::PPC),
-        // mips
-        object::Architecture::Mips | object::Architecture::Mips64 => Some(capstone::Arch::MIPS),
-        // risc-v
-        object::Architecture::Riscv32 | object::Architecture::Riscv64 => Some(capstone::Arch::RISCV),
-        // sparc
-        object::Architecture::Sparc64 => Some(capstone::Arch::SPARC),
-        // s390x/sysz
-        object::Architecture::S390x => Some(capstone::Arch::SYSZ),
-        // default to None
-        _ => None
-    }
-}
-
 // init_capstone() constructs a Capstone object for the correct arch
-pub fn init_capstone(arch: object::Architecture, endianness: object::Endianness, enable_detail: bool) -> Result<Capstone, IGError> {
+pub fn init_capstone(arch: object::Architecture, endianness: object::Endianness, enable_detail: bool) -> Result<Capstone, String> {
     // translate object::Endianness to capstone::Endian
     let obj_end: capstone::Endian = match endianness {
         object::Endianness::Big => capstone::Endian::Big,
@@ -135,17 +108,13 @@ pub fn init_capstone(arch: object::Architecture, endianness: object::Endianness,
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for s390x/sysz!")),
-        _ => Err(IGError::new("Unexpected architecture!"))
+        _ => Err("Unexpected architecture!".to_owned())
     }
 }
 
 // valid_gadget_start_addrs() returns an owned vec<usize> of all the valid
 // start addresses for a gadget within the given segment.
-pub fn valid_gadget_start_addrs(segment: &object::Segment, arch: object::Architecture) -> Vec<usize> {
-    // grab segment start and end addrs
-    let segment_start_addr: usize = segment.address() as usize;
-    let segment_end_addr: usize = segment_start_addr + segment.size() as usize;
-
+pub fn valid_gadget_start_addrs(arch: object::Architecture, region_start_addr: usize, region_len: usize) -> Vec<usize> {
     // figure out the valid instruction alignment for this arch
     let instr_alignment: usize = match arch {
         // arm/aarch64/ppc/mips are 4-byte aligned
@@ -174,7 +143,7 @@ pub fn valid_gadget_start_addrs(segment: &object::Segment, arch: object::Archite
     };
 
     // iterate over the valid start addresses and return a vec containing them
-    (segment_start_addr..(segment_end_addr + 1))
+    (region_start_addr..(region_start_addr + region_len + 1))
         .step_by(instr_alignment)
         .collect()
 }
