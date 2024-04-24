@@ -7,16 +7,17 @@
 use capstone::{Capstone, InsnGroupId, InsnGroupType, InsnId};
 use capstone::arch::{self, BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode, BuildsCapstoneSyntax};
 use capstone::arch::ppc::PpcInsn;
+use crate::arch::Arch;
 use crate::cli_args::GadgetConstraints;
 
 // constant-valued Capstone group IDS
-pub const JMP_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_JUMP as u8);
-pub const CALL_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_CALL as u8);
-pub const RET_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_RET as u8);
-pub const REL_BR_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE as u8);
+const JMP_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_JUMP as u8);
+const CALL_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_CALL as u8);
+const RET_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_RET as u8);
+const REL_BR_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE as u8);
 
 // init_capstone() constructs a Capstone object for the correct arch
-pub fn init_capstone(arch: object::Architecture, endianness: object::Endianness, enable_detail: bool) -> Result<Capstone, String> {
+pub fn init_capstone(arch: Arch, endianness: object::Endianness, enable_detail: bool) -> Result<Capstone, String> {
     // translate object::Endianness to capstone::Endian
     let obj_end: capstone::Endian = match endianness {
         object::Endianness::Big => capstone::Endian::Big,
@@ -24,35 +25,35 @@ pub fn init_capstone(arch: object::Architecture, endianness: object::Endianness,
     };
 
     match arch {
-        object::Architecture::Aarch64 => Ok(Capstone::new()
+        Arch::Arm64 => Ok(Capstone::new()
             .arm64()
             .mode(arch::arm64::ArchMode::Arm)
             .endian(obj_end)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for arm64!")),
-        object::Architecture::Arm => Ok(Capstone::new()
+        Arch::Arm => Ok(Capstone::new()
             .arm()
             .mode(arch::arm::ArchMode::Arm)
             .endian(obj_end)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for arm!")),
-        object::Architecture::Mips64 => Ok(Capstone::new()
+        Arch::Mips64 => Ok(Capstone::new()
             .mips()
             .mode(arch::mips::ArchMode::Mips64)
             .endian(obj_end)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for mips64!")),
-        object::Architecture::Mips => Ok(Capstone::new()
+        Arch::Mips => Ok(Capstone::new()
             .mips()
             .mode(arch::mips::ArchMode::Mips32)
             .endian(obj_end)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for mips!")),
-        object::Architecture::Riscv64 => Ok(Capstone::new()
+        Arch::Riscv64 => Ok(Capstone::new()
             .riscv()
             .mode(arch::riscv::ArchMode::RiscV64)
             .extra_mode(std::iter::once(arch::riscv::ArchExtraMode::RiscVC))
@@ -60,7 +61,7 @@ pub fn init_capstone(arch: object::Architecture, endianness: object::Endianness,
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for riscv64!")),
-        object::Architecture::Riscv32 => Ok(Capstone::new()
+        Arch::Riscv32 => Ok(Capstone::new()
             .riscv()
             .mode(arch::riscv::ArchMode::RiscV32)
             .extra_mode(std::iter::once(arch::riscv::ArchExtraMode::RiscVC))
@@ -68,78 +69,70 @@ pub fn init_capstone(arch: object::Architecture, endianness: object::Endianness,
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for riscv32!")),
-        object::Architecture::PowerPc64 => Ok(Capstone::new()
+        Arch::PowerPc64 => Ok(Capstone::new()
             .ppc()
             .mode(arch::ppc::ArchMode::Mode64)
             .endian(obj_end)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for powerpc64!")),
-        object::Architecture::PowerPc => Ok(Capstone::new()
+        Arch::PowerPc => Ok(Capstone::new()
             .ppc()
             .mode(arch::ppc::ArchMode::Mode32)
             .endian(capstone::Endian::Big)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for powerpc32!")),
-        object::Architecture::X86_64 | object::Architecture::X86_64_X32 => Ok(Capstone::new()
+        Arch::X86_64 => Ok(Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode64)
             .syntax(arch::x86::ArchSyntax::Intel)
             .detail(enable_detail)
             .build()
-            .expect("Failed to create Capstone object for x86(_64)!")),
-        object::Architecture::I386 => Ok(Capstone::new()
+            .expect("Failed to create Capstone object for x86_64!")),
+        Arch::X86 => Ok(Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode32)
             .syntax(arch::x86::ArchSyntax::Intel)
             .detail(enable_detail)
             .build()
-            .expect("Failed to create Capstone object for x86(_64)!")),
-        object::Architecture::Sparc64 => Ok(Capstone::new()
+            .expect("Failed to create Capstone object for x86!")),
+        Arch::Sparc64 => Ok(Capstone::new()
             .sparc()
             .mode(arch::sparc::ArchMode::Default)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for sparc!")),
-        object::Architecture::S390x => Ok(Capstone::new()
+        Arch::SysZ => Ok(Capstone::new()
             .sysz()
             .mode(arch::sysz::ArchMode::Default)
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for s390x/sysz!")),
-        _ => Err("Unexpected architecture!".to_owned())
     }
 }
 
 // valid_gadget_start_addrs() returns an owned vec<usize> of all the valid
 // start addresses for a gadget within the given segment.
-pub fn valid_gadget_start_addrs(arch: object::Architecture, region_start_addr: usize, region_len: usize) -> Vec<usize> {
+pub fn valid_gadget_start_addrs(arch: Arch, region_start_addr: usize, region_len: usize) -> Vec<usize> {
     // figure out the valid instruction alignment for this arch
     let instr_alignment: usize = match arch {
         // arm/aarch64/ppc/mips are 4-byte aligned
-        object::Architecture::Arm
-        | object::Architecture::Aarch64
-        | object::Architecture::Aarch64_Ilp32
-        | object::Architecture::PowerPc
-        | object::Architecture::PowerPc64
-        | object::Architecture::Mips
-        | object::Architecture::Mips64
-        | object::Architecture::Sparc64 => 4,
+        Arch::Arm
+        | Arch::Arm64
+        | Arch::PowerPc
+        | Arch::PowerPc64
+        | Arch::Mips
+        | Arch::Mips64
+        | Arch::Sparc64 => 4,
         // risc-v can have 2-byte instructions and 2-byte alignment when it's
         // using the c extension, which we assume is is supported because all
         // risc-v SoC's that I can find in production support it.
         // s390x/sysz instructions can mysteriously be half-word aligned
         // despite having instruction sizes of 4-, 6-, and 8-bytes.
-        object::Architecture::S390x
-        | object::Architecture::Riscv32
-        | object::Architecture::Riscv64 => 2,
+        Arch::SysZ | Arch::Riscv32 | Arch::Riscv64 => 2,
         // x86/x86_64 aren't aligned
-        object::Architecture::I386
-        | object::Architecture::X86_64_X32
-        | object::Architecture::X86_64 => 1,
-        // default to None
-        _ => unreachable!("Unexpected architecture!")
+        Arch::X86 | Arch::X86_64 => 1,
     };
 
     // iterate over the valid start addresses and return a vec containing them
@@ -368,7 +361,7 @@ fn is_terminating_insn_sysz(insn: &capstone::Insn, detail: &capstone::InsnDetail
 // is_terminating_insn() evaluates whether a given instruction terminates the
 // current gadget being searched for, and if the gadget is a valid gadget after
 // the current instruction is included in it.
-pub fn is_terminating_insn(insn: &capstone::Insn, detail: &capstone::InsnDetail, arch: capstone::Arch, constraints: GadgetConstraints) -> GadgetSearchInsnInfo {
+pub fn is_terminating_insn(insn: &capstone::Insn, detail: &capstone::InsnDetail, arch: Arch, constraints: GadgetConstraints) -> GadgetSearchInsnInfo {
     // some architectures' capstone disassemblers don't tag gadget-terminating
     // instructions with the architecture-generic capstone instruction groups
     // in quite the way we're expecting, especially if those architectures
@@ -376,9 +369,9 @@ pub fn is_terminating_insn(insn: &capstone::Insn, detail: &capstone::InsnDetail,
     // differently for those architectures.
     match arch {
         // PPC, RISCV, and S390x don't play nicely.
-        capstone::Arch::PPC => is_terminating_insn_ppc(insn, detail, &constraints),
-        capstone::Arch::RISCV => is_terminating_insn_riscv(insn, detail, &constraints),
-        capstone::Arch::SYSZ => is_terminating_insn_sysz(insn, detail, &constraints),
+        Arch::PowerPc | Arch::PowerPc64 => is_terminating_insn_ppc(insn, detail, &constraints),
+        Arch::Riscv32 | Arch::Riscv64 => is_terminating_insn_riscv(insn, detail, &constraints),
+        Arch::SysZ => is_terminating_insn_sysz(insn, detail, &constraints),
         // This is the default case for architectures that play nicely.
         _ => {
             // relative branches are always direct jumps and therefore not allowed

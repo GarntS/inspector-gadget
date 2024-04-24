@@ -26,7 +26,59 @@ pub enum Arch {
 
 // Arch method impls
 impl Arch {
+    // from_obj_arch() returns the corresponding Arch for a given
+    // object::Architecture
+    pub fn from_obj_arch(arch: object::Architecture) -> Self {
+        match arch {
+            object::Architecture::Aarch64 | object::Architecture::Aarch64_Ilp32 => Arch::Arm64,
+            object::Architecture::Arm => Arch::Arm,
+            object::Architecture::I386 => Arch::X86,
+            object::Architecture::X86_64 | object::Architecture::X86_64_X32 => Arch::X86_64,
+            object::Architecture::PowerPc => Arch::PowerPc,
+            object::Architecture::PowerPc64 => Arch::PowerPc64,
+            object::Architecture::Mips => Arch::Mips,
+            object::Architecture::Mips64 => Arch::Mips64,
+            object::Architecture::Riscv32 => Arch::Riscv32,
+            object::Architecture::Riscv64 => Arch::Riscv64,
+            object::Architecture::Sparc64 => Arch::Sparc64,
+            object::Architecture::S390x => Arch::SysZ,
+            // we should always handle every case here
+            _ => unreachable!("Unexpected arch in from_obj_arch()!"),
+        }
+    }
 
+    // to_obj_arch() returns the corresponding object::Architecture for this
+    // Arch
+    pub fn to_obj_arch(&self) -> object::Architecture {
+        match self {
+            Arch::Arm64 => object::Architecture::Aarch64,
+            Arch::Arm => object::Architecture::Arm,
+            Arch::X86 => object::Architecture::I386,
+            Arch::X86_64 => object::Architecture::X86_64,
+            Arch::PowerPc => object::Architecture::PowerPc,
+            Arch::PowerPc64 => object::Architecture::PowerPc64,
+            Arch::Mips => object::Architecture::Mips,
+            Arch::Mips64 => object::Architecture::Mips64,
+            Arch::Riscv32 => object::Architecture::Riscv32,
+            Arch::Riscv64 => object::Architecture::Riscv64,
+            Arch::Sparc64 => object::Architecture::Sparc64,
+            Arch::SysZ => object::Architecture::S390x,
+        }
+    }
+
+    // to_cs_arch() returns the corresponding object::Architecture for this Arch
+    pub fn to_cs_arch(&self) -> capstone::Arch {
+        match self {
+            Arch::Arm64 => capstone::Arch::ARM64,
+            Arch::Arm => capstone::Arch::ARM,
+            Arch::X86 | Arch::X86_64 => capstone::Arch::X86,
+            Arch::PowerPc | Arch::PowerPc64 => capstone::Arch::PPC,
+            Arch::Mips | Arch::Mips64 => capstone::Arch::MIPS,
+            Arch::Riscv32 | Arch::Riscv64 => capstone::Arch::RISCV,
+            Arch::Sparc64 => capstone::Arch::SPARC,
+            Arch::SysZ => capstone::Arch::SYSZ,
+        }
+    }
 }
 
 // impl std::fmt::Display for Arch
@@ -51,7 +103,8 @@ impl fmt::Display for Arch {
 
 // impl clap::ValueEnum for Arch
 impl clap::ValueEnum for Arch {
-    // returns a slice referencing every possible enum value, in order
+    // value_variants() returns a slice referencing every possible enum value,
+    // in order
     fn value_variants<'a>() -> &'a [Self] {
         &[Arch::Arm,
             Arch::Arm64,
@@ -68,38 +121,42 @@ impl clap::ValueEnum for Arch {
         ]
     }
 
-    // returns a clap::builder::PossibleValue for a provided Arch ref
+    // to_possible_value() returns a clap::builder::PossibleValue for a provided
+    // Arch ref
     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        match self {
+            Arch:: Arm => Some(clap::builder::PossibleValue::new("arm/arm32")),
+            Arch:: Arm64 => Some(clap::builder::PossibleValue::new("arm64/aarch64")),
+            Arch:: X86 => Some(clap::builder::PossibleValue::new("x86/i386/i686/ia32")),
+            Arch:: X86_64 => Some(clap::builder::PossibleValue::new("x86_64/x64/ia64")),
+            Arch:: Mips => Some(clap::builder::PossibleValue::new("mips/mips32")),
+            Arch:: Mips64 => Some(clap::builder::PossibleValue::new("mips64")),
+            Arch:: PowerPc => Some(clap::builder::PossibleValue::new("powerpc32/ppc32/powerpc/ppc")),
+            Arch:: PowerPc64 => Some(clap::builder::PossibleValue::new("powerpc64/ppc64")),
+            Arch:: Riscv32 => Some(clap::builder::PossibleValue::new("riscv32/rv32/riscv")),
+            Arch:: Riscv64 => Some(clap::builder::PossibleValue::new("riscv64/rv64")),
+            Arch:: Sparc64 => Some(clap::builder::PossibleValue::new("sparc64/sparc")),
+            Arch:: SysZ => Some(clap::builder::PossibleValue::new("sysz/s390x/systemz"))
+        }
         
     }
 
-    fn from_str(input: &str, ignore_case: bool) -> Result<Self, String> {
-
-        
-    }
-}
-
-// object_arch_to_cs_arch() returns the corresponding capstone::arch enum value
-// for the provided object::Architecture enum value.
-pub fn object_arch_to_cs_arch(arch: object::Architecture) -> Option<capstone::Arch> {
-    match arch {
-        // aarch64
-        object::Architecture::Aarch64 | object::Architecture::Aarch64_Ilp32 => Some(capstone::Arch::ARM64),
-        // arm32
-        object::Architecture::Arm => Some(capstone::Arch::ARM),
-        // x86/x86_64
-        object::Architecture::I386 | object::Architecture::X86_64 | object::Architecture::X86_64_X32 => Some(capstone::Arch::X86),
-        // ppc
-        object::Architecture::PowerPc | object::Architecture::PowerPc64 => Some(capstone::Arch::PPC),
-        // mips
-        object::Architecture::Mips | object::Architecture::Mips64 => Some(capstone::Arch::MIPS),
-        // risc-v
-        object::Architecture::Riscv32 | object::Architecture::Riscv64 => Some(capstone::Arch::RISCV),
-        // sparc
-        object::Architecture::Sparc64 => Some(capstone::Arch::SPARC),
-        // s390x/sysz
-        object::Architecture::S390x => Some(capstone::Arch::SYSZ),
-        // default to None
-        _ => None
+    // from_str() returns an Arch matching a provided str input or an error
+    fn from_str(input: &str, _ic: bool) -> Result<Self, String> {
+        match input.to_lowercase().as_str() {
+            "arm" | "arm32" => Ok(Arch::Arm),
+            "arm64" | "aarch64" => Ok(Arch::Arm64),
+            "i386" | "i686" | "ia32" | "ia-32" |"x86" => Ok(Arch::X86),
+            "x64" | "ia64" | "ia-64" | "x86_64" => Ok(Arch::X86_64),
+            "mips" | "mips32" => Ok(Arch::Mips),
+            "mips64" => Ok(Arch::Mips64),
+            "ppc32" | "powerpc32" | "ppc" | "powerpc" => Ok(Arch::PowerPc),
+            "ppc64" | "powerpc64" => Ok(Arch::PowerPc64),
+            "riscv32" | "rv32" | "riscv" => Ok(Arch::Riscv32),
+            "riscv64" | "rv64" => Ok(Arch::Riscv64),
+            "sparc" | "sparc64" => Ok(Arch::Sparc64),
+            "sysz" | "s390x" | "systemz" => Ok(Arch::SysZ),
+            _ => Err("Unknown arch str!".to_owned())
+        }
     }
 }

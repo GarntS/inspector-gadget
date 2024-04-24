@@ -9,6 +9,7 @@ mod capstone_tools;
 mod cli_args;
 mod gadget_tree;
 
+use arch::Arch;
 use capstone::Capstone;
 use clap::Parser;
 use cli_args::{CLIArgs, GadgetConstraints};
@@ -39,10 +40,9 @@ fn is_valid_gadget_len(n_insns: usize, constraints: GadgetConstraints) -> bool {
 
 // find_gadget() finds a single gadget and returns the string representation
 // of its mnemonics if one is found.
-fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, endianness: object::Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
+fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: object::Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
     // init capstone and use it to do the disassembly
     let cs: Capstone = capstone_tools::init_capstone(arch, endianness, true).unwrap();
-    let cs_arch = capstone_tools::object_arch_to_cs_arch(arch).unwrap();
     let insns = cs.disasm_all(search_bytes, addr as u64)
                 .expect("Capstone failed disassembly!");
 
@@ -58,7 +58,7 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, end
 
         // grab this instruction's groups
         let detail = cs.insn_detail(insn).unwrap();
-        let GadgetSearchInsnInfo {is_terminating, is_valid_gadget} = is_terminating_insn(insn, &detail, cs_arch, constraints);
+        let GadgetSearchInsnInfo {is_terminating, is_valid_gadget} = is_terminating_insn(insn, &detail, arch, constraints);
     
         // if this insn is terminating and the gadget is still valid, stop
         // searching and return it if its length is ok.
@@ -88,7 +88,7 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: object::Architecture, end
 
 // get_gadget_mnemonic() returns an owned string representing the concatenated
 // mnemonics of the provided gadget bytes
-fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: object::Architecture, endianness: object::Endianness) -> String {
+fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: Arch, endianness: object::Endianness) -> String {
     // init capstone and use it to do the disassembly
     let cs: Capstone = capstone_tools::init_capstone(arch, endianness, false).unwrap();
     let insns = cs.disasm_all(gadget_bytes, gadget_addr as u64)
@@ -129,40 +129,41 @@ fn main() -> Result<(), String> {
     let bin_file = object::File::parse(&*bin_data).unwrap();
 
     // grab the binary file's architecture and address size
-    let bin_arch = bin_file.architecture();
+    let bin_arch = Arch::from_obj_arch(bin_file.architecture());
     let bin_endianness = bin_file.endianness();
     println!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
-    if !Capstone::supports_arch(capstone_tools::object_arch_to_cs_arch(bin_arch).unwrap()) {
+    if !Capstone::supports_arch(bin_arch.to_cs_arch()) {
         // TODO(garnt): remove if riscv supports_arch() bug gets fixed
         // there's a bug with Capstone::supports_arch() where it returns false
         // even if the underlying capstone library is compiled with riscv
         // support. For the time being, if the arch is RISCV, don't raise the
         // error.
-        if capstone_tools::object_arch_to_cs_arch(bin_arch).unwrap() != capstone::Arch::RISCV {
+        if bin_arch.to_cs_arch() != capstone::Arch::RISCV {
             return Err("Underlying capstone library doesn't support arch!".to_owned())
         }
     }
 
     // grab the max instruction length, in bytes, for the correct arch
-    let max_insn_len_bytes: usize = match capstone_tools::object_arch_to_cs_arch(bin_arch) {
+    let max_insn_len_bytes: usize = match bin_arch {
         // arm/aarch64/ppc/mips/risc-v are all fixed 4-byte instructions
-        Some(capstone::Arch::ARM)
-        | Some(capstone::Arch::ARM64)
-        | Some(capstone::Arch::PPC)
-        | Some(capstone::Arch::MIPS)
-        | Some(capstone::Arch::RISCV)
-        | Some(capstone::Arch::SPARC) => Some(4),
+        Arch::Arm
+        | Arch::Arm64
+        | Arch::PowerPc
+        | Arch::PowerPc64
+        | Arch::Mips
+        | Arch::Mips64
+        | Arch::Riscv32
+        | Arch::Riscv64
+        | Arch::Sparc64 => 4,
         // s390x/sysz has 4/6/8-byte instructions
-        Some(capstone::Arch::SYSZ) => Some(8),
+        Arch::SysZ => 8,
         // x86/x86_64 has some long-ass instructions
-        Some(capstone::Arch::X86) => Some(15),
-        // default to None
-        _ => None
-    }.expect("Unexpected value for bin_arch!");
+        Arch::X86 | Arch::X86_64 => 15,
+    };
 
     // generate a list of 3-tuples of all the executable segments/sections in
     // the provided binary
-    let mut search_regions: Vec<(usize, usize, Option<std::string::String>, &[u8])> = bin_file.segments()
+    let search_regions: Vec<(usize, usize, Option<std::string::String>, &[u8])> = bin_file.segments()
         .filter(|segment| match segment.flags() {
             object::SegmentFlags::Coff { characteristics } => {
                 (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
