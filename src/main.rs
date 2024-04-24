@@ -22,22 +22,6 @@ use regex::Regex;
 use std::sync::Mutex;
 use capstone_tools::{is_terminating_insn, GadgetSearchInsnInfo};
 
-// is_valid_gadget_len() returns true if a gadget length is valid given the
-// passed GadgetConstraints object.
-fn is_valid_gadget_len(n_insns: usize, constraints: GadgetConstraints) -> bool {
-    // if we have too few insns, this length is invalid
-    if n_insns < constraints.min_insns {
-        return false
-    }
-    // if we have too many insns, this length is invalid
-    if n_insns > constraints.max_insns {
-        return false;
-    }
-
-    // if we got here, the length is valid
-    true
-}
-
 // find_gadget() finds a single gadget and returns the string representation
 // of its mnemonics if one is found.
 fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: object::Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
@@ -48,7 +32,6 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: object:
 
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
-    let mut found_valid_gadget: bool = false;
     let mut gadget_slices: Vec<&[u8]> = Vec::new();
     for insn in insns.as_ref() {
         // update gadget_len
@@ -63,26 +46,26 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: object:
         // if this insn is terminating and the gadget is still valid, stop
         // searching and return it if its length is ok.
         if is_terminating && is_valid_gadget {
-            found_valid_gadget = is_valid_gadget_len(gadget_slices.len(), constraints);
-            break;
+            // if we have too few insns, this gadget is invalid
+            if gadget_slices.len() < constraints.min_insns {
+                return None;
+            }
+            // if we have too many insns, this gadget is invalid
+            if gadget_slices.len() > constraints.max_insns {
+                return None;
+            }
+
+            // if we got here, the gadget is valid
+            return Some((addr, gadget_slices));
+
         // otherwise, if the insn is terminating or the gadget is invalid, stop
         // searching and return none.
         } else if is_terminating || !is_valid_gadget {
-            break;
+            return None;
         }
     }
 
-    // TODO(garnt): reconsider memory leak
-    // explicitly drop the capstone disassembler and instructions objects
-    std::mem::drop(insns);
-    std::mem::drop(cs);
-
-    // if we found a gadget
-    if found_valid_gadget {
-        return Some((addr, gadget_slices));
-    }
-
-    // if we didn't find a gadget, return None
+    // if we got here, we didn't find a gadget, so return None
     None
 }
 
@@ -124,14 +107,78 @@ fn main() -> Result<(), String> {
         None => Mutex::new(Regex::new(r"^$").expect("Failed to compile regex!")),
     };
 
-    // read the binary file into memory, then parse it
-    let bin_data = std::fs::read(cli_args.bin_path).unwrap();
-    let bin_file = object::File::parse(&*bin_data).unwrap();
+    // the variables we need for gadget-finding
+    let bin_data: Vec<u8>;
+    let bin_arch: Arch;
+    let bin_endianness: object::Endianness;
+    let search_regions: Vec<(usize, usize, Option<std::string::String>, &[u8])>;
 
-    // grab the binary file's architecture and address size
-    let bin_arch = Arch::from_obj_arch(bin_file.architecture());
-    let bin_endianness = bin_file.endianness();
-    println!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
+    // if raw binary, don't parse the binary
+    if cli_args.raw_binary {
+        bin_data = std::fs::read(cli_args.bin_path).unwrap();
+        bin_arch = cli_args.arch.expect("arch should always be set for raw bins");
+        bin_endianness = cli_args.endianness;
+
+    // otherwise, assume it's a "standard" object file
+    } else {
+        // read the binary file into memory, then parse it
+        bin_data = std::fs::read(cli_args.bin_path).unwrap();
+        let bin_file = object::File::parse(&*bin_data).unwrap();
+
+        // grab the binary file's architecture and address size
+        bin_arch = Arch::from_obj_arch(bin_file.architecture());
+        bin_endianness = bin_file.endianness();
+        println!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
+
+        // generate a list of 3-tuples of all the executable segments/sections in
+        // the provided binary
+        search_regions = bin_file.segments()
+            .filter(|segment| match segment.flags() {
+                object::SegmentFlags::Coff { characteristics } => {
+                    (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
+                },
+                object::SegmentFlags::Elf { p_flags, .. } => {
+                    (p_flags & object::elf::PF_X) > 0
+                },
+                object::SegmentFlags::MachO { initprot, .. } => {
+                    (initprot & object::macho::VM_PROT_EXECUTE) > 0
+                },
+                _ => false
+            })
+            .map(|exec_segment| (
+                exec_segment.address() as usize,
+                exec_segment.size() as usize,
+                match exec_segment.name().unwrap() {
+                    Some(x) => Some(x.to_owned()),
+                    None => None
+                },
+                exec_segment.data().unwrap().as_ref()
+            ))
+            // iterate sections as well and chain the resulting iterators
+            .chain(bin_file.sections()
+            .filter(|section| match section.flags() {
+                object::SectionFlags::Coff { characteristics } => {
+                    (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
+                },
+                object::SectionFlags::Elf { sh_flags, .. } => {
+                    (sh_flags & (object::elf::SHF_EXECINSTR as u64)) > 0
+                },
+                // we can ignore mach-o, as it can't have executable sections that
+                // aren't also segments.
+                _ => false
+            })
+            .map(|exec_section| (
+                exec_section.address() as usize,
+                exec_section.size() as usize,
+                Some(exec_section.name().unwrap().to_owned()),
+                exec_section.data().unwrap().as_ref()
+            )))
+            // some regions appear as sections and segments, so deduplicate them by
+            // keying on their load addresses
+            .unique_by(|region| region.0)
+            .collect();
+    }
+
     if !Capstone::supports_arch(bin_arch.to_cs_arch()) {
         // TODO(garnt): remove if riscv supports_arch() bug gets fixed
         // there's a bug with Capstone::supports_arch() where it returns false
@@ -161,53 +208,6 @@ fn main() -> Result<(), String> {
         Arch::X86 | Arch::X86_64 => 15,
     };
 
-    // generate a list of 3-tuples of all the executable segments/sections in
-    // the provided binary
-    let search_regions: Vec<(usize, usize, Option<std::string::String>, &[u8])> = bin_file.segments()
-        .filter(|segment| match segment.flags() {
-            object::SegmentFlags::Coff { characteristics } => {
-                (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
-            },
-            object::SegmentFlags::Elf { p_flags, .. } => {
-                (p_flags & object::elf::PF_X) > 0
-            },
-            object::SegmentFlags::MachO { initprot, .. } => {
-                (initprot & object::macho::VM_PROT_EXECUTE) > 0
-            },
-            _ => false
-        })
-        .map(|exec_segment| (
-            exec_segment.address() as usize,
-            exec_segment.size() as usize,
-            match exec_segment.name().unwrap() {
-                Some(x) => Some(x.to_owned()),
-                None => None
-            },
-            exec_segment.data().unwrap().as_ref()
-        ))
-        // iterate sections as well and chain the resulting iterators
-        .chain(bin_file.sections()
-        .filter(|section| match section.flags() {
-            object::SectionFlags::Coff { characteristics } => {
-                (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
-            },
-            object::SectionFlags::Elf { sh_flags, .. } => {
-                (sh_flags & (object::elf::SHF_EXECINSTR as u64)) > 0
-            },
-            // we can ignore mach-o, as it can't have executable sections that
-            // aren't also segments.
-            _ => false
-        })
-        .map(|exec_section| (
-            exec_section.address() as usize,
-            exec_section.size() as usize,
-            Some(exec_section.name().unwrap().to_owned()),
-            exec_section.data().unwrap().as_ref()
-        )))
-        // some regions appear as sections and segments, so deduplicate them by
-        // keying on their load addresses
-        .unique_by(|region| region.0)
-        .collect();
 
     // instantiate a new gadget tree for deduplication
     let mut gadget_tree: GadgetTree = GadgetTree::new();

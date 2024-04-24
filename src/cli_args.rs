@@ -5,6 +5,7 @@
  */
 
 use clap::Parser;
+use std::path::PathBuf;
 use crate::arch::Arch;
 
 // Struct to contain the clap-parsed arguments.
@@ -13,19 +14,31 @@ use crate::arch::Arch;
 #[clap(rename_all = "kebab_case")]
 pub struct CLIArgs {
     // path to the binary file to search in
-    pub bin_path: String,
+    pub bin_path: PathBuf,
+
+    // path to the file which should be written to
+    #[arg(short, long, group = "outfile")]
+    pub out_file: Option<PathBuf>,
+
+    // true if out_file should be written to even if it already exists
+    #[arg(long, requires = "outfile", default_value_t = false)]
+    pub overwrite: bool,
 
     // string containing regex to filter with
     #[arg(short, long)]
     pub regex_str: Option<String>,
 
     // true if the input binary should be treated as a raw blob
-    #[arg(long, default_value_t = false)]
+    #[arg(long, requires = "manualarch", default_value_t = false)]
     pub raw_binary: bool,
 
     // override for input binary arch
-    #[arg(long, value_enum)]
+    #[arg(long, group = "manualarch", value_enum)]
     pub arch: Option<Arch>,
+
+    // override for input binary endianness
+    #[arg(long, default_value_t = object::Endianness::Little)]
+    pub endianness: Option<object::Endianness>,
 
     //
     // Below are fields that can be serialized into a GadgetConstraints struct.

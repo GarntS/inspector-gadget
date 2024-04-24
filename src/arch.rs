@@ -7,6 +7,13 @@
 
 use std::fmt;
 
+// Endianness refers to a specific architecture
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Endianness {
+    Big,
+    Little
+}
+
 // Arch refers to a specific architecture
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arch {
@@ -22,6 +29,55 @@ pub enum Arch {
     Riscv64,
     Sparc64,
     SysZ,
+}
+
+// Endianness method impls
+impl Endianness {
+    // from_cs_endian() returns the corresponding Endianness for a given
+    // capstone::Endian
+    pub fn from_cs_endian(endian: capstone::Endian) -> Self {
+        match endian {
+            capstone::Endian::Big => Endianness::Big,
+            capstone::Endian::Little => Endianness::Little,
+        }
+    }
+
+    // from_obj_endianness() returns the corresponding Endianness for a given
+    // object::Endianness
+    pub fn from_obj_endianness(endianness: object::Endianness) -> Self {
+        match endianness {
+            object::Endianness::Big => Endianness::Big,
+            object::Endianness::Little => Endianness::Little,
+        }
+    }
+
+    // to_cs_endian() returns the corresponding capstone::Endian for this
+    // Endianness
+    pub fn to_cs_endian(&self) -> capstone::Endian {
+        match self {
+            Endianness::Big => capstone::Endian::Big,
+            Endianness::Little => capstone::Endian::Little,
+        }
+    } 
+
+    // to_obj_endianness() returns the corresponding object::Endianness for
+    // this Endianness.
+    pub fn to_obj_endianness(&self) -> object::Endianness {
+        match self {
+            Endianness::Big => object::Endianness::Big,
+            Endianness::Little => object::Endianness::Little,
+        }
+    } 
+}
+
+// impl std::fmt::Display for Endianness
+impl fmt::Display for Endianness {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Endianness::Big => write!(f, "big-endian"),
+            Endianness::Little => write!(f, "little-endian"),
+        }
+    }
 }
 
 // Arch method impls
@@ -125,38 +181,19 @@ impl clap::ValueEnum for Arch {
     // Arch ref
     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
         match self {
-            Arch:: Arm => Some(clap::builder::PossibleValue::new("arm/arm32")),
-            Arch:: Arm64 => Some(clap::builder::PossibleValue::new("arm64/aarch64")),
-            Arch:: X86 => Some(clap::builder::PossibleValue::new("x86/i386/i686/ia32")),
-            Arch:: X86_64 => Some(clap::builder::PossibleValue::new("x86_64/x64/ia64")),
-            Arch:: Mips => Some(clap::builder::PossibleValue::new("mips/mips32")),
+            Arch:: Arm => Some(clap::builder::PossibleValue::new("arm")),
+            Arch:: Arm64 => Some(clap::builder::PossibleValue::new("arm64")),
+            Arch:: X86 => Some(clap::builder::PossibleValue::new("x86")),
+            Arch:: X86_64 => Some(clap::builder::PossibleValue::new("x86_64")),
+            Arch:: Mips => Some(clap::builder::PossibleValue::new("mips")),
             Arch:: Mips64 => Some(clap::builder::PossibleValue::new("mips64")),
-            Arch:: PowerPc => Some(clap::builder::PossibleValue::new("powerpc32/ppc32/powerpc/ppc")),
-            Arch:: PowerPc64 => Some(clap::builder::PossibleValue::new("powerpc64/ppc64")),
-            Arch:: Riscv32 => Some(clap::builder::PossibleValue::new("riscv32/rv32/riscv")),
-            Arch:: Riscv64 => Some(clap::builder::PossibleValue::new("riscv64/rv64")),
-            Arch:: Sparc64 => Some(clap::builder::PossibleValue::new("sparc64/sparc")),
-            Arch:: SysZ => Some(clap::builder::PossibleValue::new("sysz/s390x/systemz"))
+            Arch:: PowerPc => Some(clap::builder::PossibleValue::new("powerpc")),
+            Arch:: PowerPc64 => Some(clap::builder::PossibleValue::new("powerpc64")),
+            Arch:: Riscv32 => Some(clap::builder::PossibleValue::new("riscv")),
+            Arch:: Riscv64 => Some(clap::builder::PossibleValue::new("riscv64")),
+            Arch:: Sparc64 => Some(clap::builder::PossibleValue::new("sparc64")),
+            Arch:: SysZ => Some(clap::builder::PossibleValue::new("sysz"))
         }
         
-    }
-
-    // from_str() returns an Arch matching a provided str input or an error
-    fn from_str(input: &str, _ic: bool) -> Result<Self, String> {
-        match input.to_lowercase().as_str() {
-            "arm" | "arm32" => Ok(Arch::Arm),
-            "arm64" | "aarch64" => Ok(Arch::Arm64),
-            "i386" | "i686" | "ia32" | "ia-32" |"x86" => Ok(Arch::X86),
-            "x64" | "ia64" | "ia-64" | "x86_64" => Ok(Arch::X86_64),
-            "mips" | "mips32" => Ok(Arch::Mips),
-            "mips64" => Ok(Arch::Mips64),
-            "ppc32" | "powerpc32" | "ppc" | "powerpc" => Ok(Arch::PowerPc),
-            "ppc64" | "powerpc64" => Ok(Arch::PowerPc64),
-            "riscv32" | "rv32" | "riscv" => Ok(Arch::Riscv32),
-            "riscv64" | "rv64" => Ok(Arch::Riscv64),
-            "sparc" | "sparc64" => Ok(Arch::Sparc64),
-            "sysz" | "s390x" | "systemz" => Ok(Arch::SysZ),
-            _ => Err("Unknown arch str!".to_owned())
-        }
     }
 }
