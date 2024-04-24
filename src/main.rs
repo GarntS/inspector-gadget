@@ -166,18 +166,12 @@ fn main() -> Result<(), IGError> {
         // check if this section will be marked executable. if not, ignore it.
         if ! match segment.flags() {
             object::SegmentFlags::Coff { characteristics } => {
-                // todo(garnt): remove
-                println!("seg chars: {:x}", characteristics);
                 (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
             },
             object::SegmentFlags::Elf { p_flags, .. } => {
-                // todo(garnt): remove
-                println!("seg p_flags: {:x}", p_flags);
                 (p_flags & object::elf::PF_X) > 0
             },
             object::SegmentFlags::MachO { initprot, .. } => {
-                // todo(garnt): remove
-                println!("seg initprot: {:x}", initprot);
                 (initprot & object::macho::VM_PROT_EXECUTE) > 0
             },
             _ => false
@@ -185,8 +179,6 @@ fn main() -> Result<(), IGError> {
             continue;
         }
 
-        // TODO(garnt): remove
-        println!("seg len: {}", segment.size());
         // setup progress bar style
         let seg_name = segment.name().unwrap();
         let mut bar_str: String = match seg_name {
@@ -199,11 +191,15 @@ fn main() -> Result<(), IGError> {
         // grab a copy of the segment contents we can slice up
         let seg_bytes: Arc<[u8]> = segment.data().unwrap().into();
 
+        // make sure the byte slice we grabbed actually has contents. ntoskrnl
+        // has a segment that has a length but no data, so we have to check.
+        if seg_bytes.len() == 0 {
+            continue;
+        }
+
         // find all valid gadget start addresses within the segment, then
         // actually do the gadget search.
         let gadget_starts = capstone_tools::valid_gadget_start_addrs(&segment, bin_arch);
-        // TODO(garnt): remove
-        println!("gadget_starts len: {}", gadget_starts.len());
         let mut single_gadgets: Vec<(usize, Vec<&[u8]>)> = gadget_starts
             // iterate over the start addresses, parallelizing with rayon
             .par_iter()
