@@ -6,7 +6,7 @@
 
 use clap::Parser;
 use std::path::PathBuf;
-use crate::arch::Arch;
+use crate::arch::{Arch, Endianness};
 
 // Struct to contain the clap-parsed arguments.
 #[derive(Parser, Debug, PartialEq)]
@@ -33,12 +33,12 @@ pub struct CLIArgs {
     pub raw_binary: bool,
 
     // override for input binary arch
-    #[arg(long, group = "manualarch", value_enum)]
+    #[arg(long, value_enum, group = "manualarch")]
     pub arch: Option<Arch>,
 
     // override for input binary endianness
-    #[arg(long, default_value_t = object::Endianness::Little)]
-    pub endianness: Option<object::Endianness>,
+    #[arg(long, value_enum, default_value_t = Endianness::Little)]
+    pub endianness: Endianness,
 
     //
     // Below are fields that can be serialized into a GadgetConstraints struct.
