@@ -1,36 +1,43 @@
-/*  file:       main.rs
-    author:     garnt
-    date:       04/15/2024
-    desc:       Entrypoint for inspector_gadget.
- */
+/*  file:   main.rs
+    author: garnt
+    date:   04/15/2024
+    desc:   Entrypoint for inspector_gadget.
+*/
 
 mod arch;
-mod capstone_tools;
+mod disasm_tools;
 mod cli_args;
 mod gadget_tree;
 
+use crate::arch::{Arch, Endianness};
+use crate::disasm_tools::{is_terminating_insn, GadgetSearchInsnInfo};
+use crate::cli_args::{CLIArgs, GadgetConstraints};
+use crate::gadget_tree::GadgetTree;
 use capstone::Capstone;
 use clap::Parser;
-use crate::arch::{Arch, Endianness};
-use crate::cli_args::{CLIArgs, GadgetConstraints};
-use crate::capstone_tools::{is_terminating_insn, GadgetSearchInsnInfo};
-use crate::gadget_tree::GadgetTree;
 use indicatif::{ParallelProgressIterator, ProgressIterator};
 use itertools::Itertools;
 use object::{Object, ObjectSection, ObjectSegment};
-use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
 use std::io::Write;
-use std::{fs, io};
 use std::sync::Mutex;
+use std::{fs, io};
 
 // find_gadget() finds a single gadget and returns the string representation
 // of its mnemonics if one is found.
-fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
+fn find_gadget(
+    search_bytes: &[u8],
+    addr: usize,
+    arch: Arch,
+    endianness: Endianness,
+    constraints: GadgetConstraints,
+) -> Option<(usize, Vec<&[u8]>)> {
     // init capstone and use it to do the disassembly
-    let cs: Capstone = capstone_tools::init_capstone(arch, endianness, true).unwrap();
-    let insns = cs.disasm_all(search_bytes, addr as u64)
-                .expect("Capstone failed disassembly!");
+    let cs: Capstone = disasm_tools::init_capstone(arch, endianness, true).unwrap();
+    let insns = cs
+        .disasm_all(search_bytes, addr as u64)
+        .expect("Capstone failed disassembly!");
 
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
@@ -43,8 +50,11 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: Endiann
 
         // grab this instruction's groups
         let detail = cs.insn_detail(insn).unwrap();
-        let GadgetSearchInsnInfo {is_terminating, is_valid_gadget} = is_terminating_insn(insn, &detail, arch, constraints);
-    
+        let GadgetSearchInsnInfo {
+            is_terminating,
+            is_valid_gadget,
+        } = is_terminating_insn(insn, &detail, arch, constraints);
+
         // if this insn is terminating and the gadget is still valid, stop
         // searching and return it if its length is ok.
         if is_terminating && is_valid_gadget {
@@ -73,12 +83,18 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: Endiann
 
 // get_gadget_mnemonic() returns an owned string representing the concatenated
 // mnemonics of the provided gadget bytes
-fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: Arch, endianness: Endianness) -> String {
+fn get_gadget_mnemonic(
+    gadget_bytes: &[u8],
+    gadget_addr: usize,
+    arch: Arch,
+    endianness: Endianness,
+) -> String {
     // init capstone and use it to do the disassembly
-    let cs: Capstone = capstone_tools::init_capstone(arch, endianness, false).unwrap();
-    let insns = cs.disasm_all(gadget_bytes, gadget_addr as u64)
-                .expect("Capstone failed disassembly!");
-    
+    let cs: Capstone = disasm_tools::init_capstone(arch, endianness, false).unwrap();
+    let insns = cs
+        .disasm_all(gadget_bytes, gadget_addr as u64)
+        .expect("Capstone failed disassembly!");
+
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
     insns
@@ -105,7 +121,7 @@ fn main() -> Result<(), String> {
 
     // compile regex and put it in a Mutex
     let regex_mtx: Mutex<Regex> = match &cli_args.regex_str {
-        Some(reg_str) =>Mutex::new(Regex::new(&reg_str).expect("Failed to compile regex!")),
+        Some(reg_str) => Mutex::new(Regex::new(&reg_str).expect("Failed to compile regex!")),
         None => Mutex::new(Regex::new(r"^$").expect("Failed to compile regex!")),
     };
 
@@ -114,12 +130,17 @@ fn main() -> Result<(), String> {
     if let Some(out_file_path) = &cli_args.out_file {
         // if the out_file is a directory, refuse to overwrite it
         if out_file_path.is_dir() {
-            return Err(format!("Refusing to overwrite {}, which is a directory. Exiting...", out_file_path.to_str().unwrap()));
+            return Err(format!(
+                "Refusing to overwrite {}, which is a directory. Exiting...",
+                out_file_path.to_str().unwrap()
+            ));
         }
 
         // if the out_file already exists, make sure --overwrite was passed
         if out_file_path.exists() && !cli_args.overwrite {
-            return Err("Refusing to overwrite out_file without --overwrite! Exiting...".to_owned());
+            return Err(
+                "Refusing to overwrite out_file without --overwrite! Exiting...".to_owned(),
+            );
         }
 
         // if we got here, we're good to use the file
@@ -135,7 +156,9 @@ fn main() -> Result<(), String> {
     // if raw binary, don't parse the binary
     if cli_args.raw_binary {
         bin_data = fs::read(cli_args.bin_path).unwrap();
-        bin_arch = cli_args.arch.expect("arch should always be set for raw bins");
+        bin_arch = cli_args
+            .arch
+            .expect("arch should always be set for raw bins");
         bin_endianness = cli_args.endianness;
         search_regions = Vec::new();
         search_regions.push((0x0, bin_data.len(), None, bin_data.as_slice()));
@@ -153,47 +176,53 @@ fn main() -> Result<(), String> {
 
         // generate a list of 3-tuples of all the executable segments/sections in
         // the provided binary
-        search_regions = bin_file.segments()
+        search_regions = bin_file
+            .segments()
             .filter(|segment| match segment.flags() {
                 object::SegmentFlags::Coff { characteristics } => {
                     (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
-                },
-                object::SegmentFlags::Elf { p_flags, .. } => {
-                    (p_flags & object::elf::PF_X) > 0
-                },
+                }
+                object::SegmentFlags::Elf { p_flags, .. } => (p_flags & object::elf::PF_X) > 0,
                 object::SegmentFlags::MachO { initprot, .. } => {
                     (initprot & object::macho::VM_PROT_EXECUTE) > 0
-                },
-                _ => false
+                }
+                _ => false,
             })
-            .map(|exec_segment| (
-                exec_segment.address() as usize,
-                exec_segment.size() as usize,
-                match exec_segment.name().unwrap() {
-                    Some(x) => Some(x.to_owned()),
-                    None => None
-                },
-                exec_segment.data().unwrap().as_ref()
-            ))
+            .map(|exec_segment| {
+                (
+                    exec_segment.address() as usize,
+                    exec_segment.size() as usize,
+                    match exec_segment.name().unwrap() {
+                        Some(x) => Some(x.to_owned()),
+                        None => None,
+                    },
+                    exec_segment.data().unwrap().as_ref(),
+                )
+            })
             // iterate sections as well and chain the resulting iterators
-            .chain(bin_file.sections()
-            .filter(|section| match section.flags() {
-                object::SectionFlags::Coff { characteristics } => {
-                    (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
-                },
-                object::SectionFlags::Elf { sh_flags, .. } => {
-                    (sh_flags & (object::elf::SHF_EXECINSTR as u64)) > 0
-                },
-                // we can ignore mach-o, as it can't have executable sections that
-                // aren't also segments.
-                _ => false
-            })
-            .map(|exec_section| (
-                exec_section.address() as usize,
-                exec_section.size() as usize,
-                Some(exec_section.name().unwrap().to_owned()),
-                exec_section.data().unwrap().as_ref()
-            )))
+            .chain(
+                bin_file
+                    .sections()
+                    .filter(|section| match section.flags() {
+                        object::SectionFlags::Coff { characteristics } => {
+                            (characteristics & object::pe::IMAGE_SCN_MEM_EXECUTE) > 0
+                        }
+                        object::SectionFlags::Elf { sh_flags, .. } => {
+                            (sh_flags & (object::elf::SHF_EXECINSTR as u64)) > 0
+                        }
+                        // we can ignore mach-o, as it can't have executable sections that
+                        // aren't also segments.
+                        _ => false,
+                    })
+                    .map(|exec_section| {
+                        (
+                            exec_section.address() as usize,
+                            exec_section.size() as usize,
+                            Some(exec_section.name().unwrap().to_owned()),
+                            exec_section.data().unwrap().as_ref(),
+                        )
+                    }),
+            )
             // some regions appear as sections and segments, so deduplicate them by
             // keying on their load addresses
             .unique_by(|region| region.0)
@@ -207,7 +236,7 @@ fn main() -> Result<(), String> {
         // support. For the time being, if the arch is RISCV, don't raise the
         // error.
         if bin_arch.to_cs_arch() != capstone::Arch::RISCV {
-            return Err("Underlying capstone library doesn't support arch!".to_owned())
+            return Err("Underlying capstone library doesn't support arch!".to_owned());
         }
     }
 
@@ -228,7 +257,6 @@ fn main() -> Result<(), String> {
         // x86/x86_64 has some long-ass instructions
         Arch::X86 | Arch::X86_64 => 15,
     };
-
 
     // instantiate a new gadget tree for deduplication
     let mut gadget_tree: GadgetTree = GadgetTree::new();
@@ -252,7 +280,8 @@ fn main() -> Result<(), String> {
 
         // find all valid gadget start addresses within the segment, then
         // actually do the gadget search.
-        let gadget_starts = capstone_tools::valid_gadget_start_addrs(bin_arch, region_addr, region_len);
+        let gadget_starts =
+            disasm_tools::valid_gadget_start_addrs(bin_arch, region_addr, region_len);
         // TODO(garnt): remove
         eprintln!("len: {}", gadget_starts.len());
         let mut single_gadgets: Vec<(usize, Vec<&[u8]>)> = gadget_starts
@@ -262,22 +291,31 @@ fn main() -> Result<(), String> {
             .progress_with_style(search_style)
             // turn start addresses into offsets into the segment, then map
             // each start offset to an end offset.
-            .map(|start_addr| (start_addr - region_addr, region_data.len().min(start_addr + (max_insn_len_bytes * cli_args.max_insns) - region_addr)))
+            .map(|start_addr| {
+                (
+                    start_addr - region_addr,
+                    region_data
+                        .len()
+                        .min(start_addr + (max_insn_len_bytes * cli_args.max_insns) - region_addr),
+                )
+            })
             // actually disassemble and attempt to find a gadget
-            .map(|ofs_range| find_gadget(
-                &region_data[ofs_range.0..ofs_range.1],
-                ofs_range.0 + region_addr,
-                bin_arch,
-                bin_endianness,
-                gadget_constraints
-            ))
+            .map(|ofs_range| {
+                find_gadget(
+                    &region_data[ofs_range.0..ofs_range.1],
+                    ofs_range.0 + region_addr,
+                    bin_arch,
+                    bin_endianness,
+                    gadget_constraints,
+                )
+            })
             // filter out None results
             .flatten()
             .collect();
 
         // keep track of how many gadgets we found for sanity-checking later
         let single_gadgets_len: usize = single_gadgets.len();
-        
+
         // print the number of gadgets
         if let Some(name) = &region_name {
             eprintln!("{} gadgets in {}", single_gadgets.len(), name);
@@ -287,12 +325,14 @@ fn main() -> Result<(), String> {
 
         // add the new gadgets to the tree so we can deduplicate them
         let prev_tree_size: usize = gadget_tree.size();
-        let tree_style = indicatif::ProgressStyle::with_template("Constructing dedup tree: {bar} [{pos}/{len} ({percent}%)] ({elapsed})").unwrap();
+        let tree_style = indicatif::ProgressStyle::with_template(
+            "Constructing dedup tree: {bar} [{pos}/{len} ({percent}%)] ({elapsed})",
+        )
+        .unwrap();
         for gadget in single_gadgets.iter_mut().progress_with_style(tree_style) {
             gadget_tree.insert(&mut gadget.1, gadget.0);
         }
         assert_eq!(single_gadgets_len, gadget_tree.size() - prev_tree_size);
-
     }
 
     // walk the tree to get a list of unique gadgets and their start addrs
@@ -304,7 +344,10 @@ fn main() -> Result<(), String> {
     eprintln!("{} unique gadgets found.", gadgets.len());
 
     // setup progress bar style for mnemonic-finding
-    let mnemonic_bar_style = indicatif::ProgressStyle::with_template("Fetching gadget mnemonics: {bar} [{pos}/{len} ({percent}%)] ({elapsed})").unwrap();
+    let mnemonic_bar_style = indicatif::ProgressStyle::with_template(
+        "Fetching gadget mnemonics: {bar} [{pos}/{len} ({percent}%)] ({elapsed})",
+    )
+    .unwrap();
 
     // generate mnemonic strings for gadgets
     let mnemonics: Vec<(String, &[usize])> = gadgets
@@ -314,14 +357,17 @@ fn main() -> Result<(), String> {
         .progress_with_style(mnemonic_bar_style)
         // actually disassemble and attempt to find a gadget
         .map(|pair| {
-            (get_gadget_mnemonic(pair.0.as_ref(), pair.1[0], bin_arch, bin_endianness), pair.1)
+            (
+                get_gadget_mnemonic(pair.0.as_ref(), pair.1[0], bin_arch, bin_endianness),
+                pair.1,
+            )
         })
         // filter mnemonics using regex
         .filter(|pair| {
             // only bother with the regex if the regex object exists
             if (&cli_args.regex_str).is_some() {
                 let regex_obj = regex_mtx.lock().unwrap();
-                return regex_obj.is_match(&pair.0)
+                return regex_obj.is_match(&pair.0);
             // if there's no regex object, just yield everything
             } else {
                 return true;
@@ -343,7 +389,9 @@ fn main() -> Result<(), String> {
 
         // actually write all the gadgets to the file
         for mnemonic in mnemonics.iter() {
-            out_writer.write(format!("{:02x?}: {}\n", mnemonic.1, mnemonic.0).as_bytes()).unwrap();
+            out_writer
+                .write(format!("{:02x?}: {}\n", mnemonic.1, mnemonic.0).as_bytes())
+                .unwrap();
         }
     } else {
         // otherwise, print the mnemonics to stdout

@@ -1,10 +1,10 @@
-/*  file:       gadget_tree.rs
-    author:     garnt
-    date:       04/16/2024
-    desc:       Tree implementation that stores gadget start addresses at the
-                start of gadgets and stores byte sequences instead of
-                human-readable strings.
- */
+/*  file:   gadget_tree.rs
+    author: garnt
+    date:   04/16/2024
+    desc:   Tree implementation that stores gadget start addresses at the start
+            of gadgets and stores byte sequences instead of human-readable
+            strings.
+*/
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::slice;
@@ -49,7 +49,11 @@ impl GadgetTree {
     // (byte_str, <slice of start addresses>) for each unique gadget.
     pub fn walk_gadgets(&self) -> Vec<(Vec<u8>, &[usize])> {
         // walk each root, collecting all gadgets into a single Vec, and return.
-        self.roots.iter().map(|root| root.walk_gadgets()).flatten().collect()
+        self.roots
+            .iter()
+            .map(|root| root.walk_gadgets())
+            .flatten()
+            .collect()
     }
 
     // insert() inserts a new (gadget, addr) pair into the tree.
@@ -64,12 +68,14 @@ impl GadgetTree {
         let cur_insn_bytes: &[u8] = gadget.pop().unwrap();
 
         // if a child matches the current instruction, recurse
-        if let Some(matching_child) = self.roots
+        if let Some(matching_child) = self
+            .roots
             .iter_mut()
-            .find(|child| child.instr_bytes.as_ref() == cur_insn_bytes) {
+            .find(|child| child.instr_bytes.as_ref() == cur_insn_bytes)
+        {
             matching_child.insert(gadget, slice::from_ref(&addr));
-            return self.n_gadgets
-        // otherwise, 
+            return self.n_gadgets;
+        // otherwise,
         // recurse
         } else {
             // create a new child node for the current instruction and recurse
@@ -104,22 +110,24 @@ impl TreeNode {
         if !self.start_addrs.is_empty() {
             gadgets.push((
                 self.instr_bytes.clone().to_vec(),
-                self.start_addrs.as_slice()
+                self.start_addrs.as_slice(),
             ));
         }
 
         // otherwise, iterate over the child nodes in parallel
-        gadgets.append(&mut self.children
-            .par_iter()
-            // call walk_gadgets() for each child
-            .map(|child| child.walk_gadgets())
-            .flatten()
-            // append this node's byte_str to the pair
-            .map(|mut pair| {
-                pair.0.extend_from_slice(&self.instr_bytes);
-                pair
-            })
-            .collect()
+        gadgets.append(
+            &mut self
+                .children
+                .par_iter()
+                // call walk_gadgets() for each child
+                .map(|child| child.walk_gadgets())
+                .flatten()
+                // append this node's byte_str to the pair
+                .map(|mut pair| {
+                    pair.0.extend_from_slice(&self.instr_bytes);
+                    pair
+                })
+                .collect(),
         );
 
         // return the list of gadgets
@@ -134,18 +142,20 @@ impl TreeNode {
         // addresses to this node and return
         if gadget.is_empty() {
             self.start_addrs.extend_from_slice(addrs);
-            return
+            return;
         }
 
         // grab the next instruction
         let cur_insn_bytes: &[u8] = gadget.pop().unwrap();
 
         // if a child matches the current instruction, recurse
-        if let Some(matching_child) = self.children
-                .iter_mut()
-                .find(|child| child.instr_bytes.as_ref() == cur_insn_bytes) {
+        if let Some(matching_child) = self
+            .children
+            .iter_mut()
+            .find(|child| child.instr_bytes.as_ref() == cur_insn_bytes)
+        {
             matching_child.insert(gadget, addrs);
-            return
+            return;
         } else {
             // create a new child node for the current instruction and recurse
             let mut new_child = TreeNode {

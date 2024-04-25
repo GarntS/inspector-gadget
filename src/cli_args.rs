@@ -1,12 +1,12 @@
-/*  file:       cli_args.rs
-    author:     garnt
-    date:       04/15/2024
-    desc:       inspector_gadget::CLIArgs struct and associated functions.
- */
+/*  file:   cli_args.rs
+    author: garnt
+    date:   04/15/2024
+    desc:   inspector_gadget::CLIArgs struct and associated functions.
+*/
 
+use crate::arch::{Arch, Endianness};
 use clap::Parser;
 use std::path::PathBuf;
-use crate::arch::{Arch, Endianness};
 
 // Struct to contain the clap-parsed arguments.
 #[derive(Parser, Debug, PartialEq)]
@@ -79,7 +79,7 @@ pub struct GadgetConstraints {
 // GadgetConstraints method impls
 impl GadgetConstraints {
     // from_cli_args() constructs a new GadgetConstraints object from the
-    // relevant fields of the passed CLIArgs object. 
+    // relevant fields of the passed CLIArgs object.
     pub fn from_cli_args(args: &CLIArgs) -> Self {
         // construct the new GadgetConstraints struct
         let constraints = GadgetConstraints {
@@ -111,7 +111,10 @@ impl GadgetConstraints {
         }
 
         // if no terminating instructions are specified, it's invalid
-        if !self.allow_terminating_ret && !self.allow_terminating_call && !self.allow_terminating_jmp {
+        if !self.allow_terminating_ret
+            && !self.allow_terminating_call
+            && !self.allow_terminating_jmp
+        {
             return Err("at least one terminating instruction must be allowed!".to_owned());
         }
 

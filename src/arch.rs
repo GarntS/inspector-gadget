@@ -1,9 +1,9 @@
-/*  file:       arch.rs
-    author:     garnt
-    date:       04/24/2024
-    desc:       Types and convenience functions used for storing architecture
-                information and converting to other formats.
- */
+/*  file:   arch.rs
+    author: garnt
+    date:   04/24/2024
+    desc:   Types and convenience functions used for storing architecture
+            information and converting to other formats.
+*/
 
 use std::fmt;
 
@@ -11,7 +11,7 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 pub enum Endianness {
     Big,
-    Little
+    Little,
 }
 
 // Arch refers to a specific architecture
@@ -59,7 +59,7 @@ impl Endianness {
             Endianness::Big => capstone::Endian::Big,
             Endianness::Little => capstone::Endian::Little,
         }
-    } 
+    }
 
     // to_obj_endianness() returns the corresponding object::Endianness for
     // this Endianness.
@@ -69,7 +69,7 @@ impl Endianness {
             Endianness::Big => object::Endianness::Big,
             Endianness::Little => object::Endianness::Little,
         }
-    } 
+    }
 }
 
 // impl std::fmt::Display for Endianness
@@ -144,18 +144,18 @@ impl Arch {
 impl fmt::Display for Arch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Arch:: Arm => write!(f, "arm"),
-            Arch:: Arm64 => write!(f, "arm64"),
-            Arch:: X86 => write!(f, "x86"),
-            Arch:: X86_64 => write!(f, "x86_64"),
-            Arch:: Mips => write!(f, "mips"),
-            Arch:: Mips64 => write!(f, "mips64"),
-            Arch:: PowerPc => write!(f, "powerpc"),
-            Arch:: PowerPc64 => write!(f, "powerpc64"),
-            Arch:: Riscv32 => write!(f, "riscv32"),
-            Arch:: Riscv64 => write!(f, "riscv64"),
-            Arch:: Sparc64 => write!(f, "sparc64"),
-            Arch:: SysZ => write!(f, "systemz"),
+            Arch::Arm => write!(f, "arm"),
+            Arch::Arm64 => write!(f, "arm64"),
+            Arch::X86 => write!(f, "x86"),
+            Arch::X86_64 => write!(f, "x86_64"),
+            Arch::Mips => write!(f, "mips"),
+            Arch::Mips64 => write!(f, "mips64"),
+            Arch::PowerPc => write!(f, "powerpc"),
+            Arch::PowerPc64 => write!(f, "powerpc64"),
+            Arch::Riscv32 => write!(f, "riscv32"),
+            Arch::Riscv64 => write!(f, "riscv64"),
+            Arch::Sparc64 => write!(f, "sparc64"),
+            Arch::SysZ => write!(f, "systemz"),
         }
     }
 }
@@ -165,7 +165,8 @@ impl clap::ValueEnum for Arch {
     // value_variants() returns a slice referencing every possible enum value,
     // in order
     fn value_variants<'a>() -> &'a [Self] {
-        &[Arch::Arm,
+        &[
+            Arch::Arm,
             Arch::Arm64,
             Arch::X86,
             Arch::X86_64,
@@ -176,7 +177,7 @@ impl clap::ValueEnum for Arch {
             Arch::Riscv32,
             Arch::Riscv64,
             Arch::Sparc64,
-            Arch::SysZ
+            Arch::SysZ,
         ]
     }
 
@@ -184,19 +185,18 @@ impl clap::ValueEnum for Arch {
     // Arch ref
     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
         match self {
-            Arch:: Arm => Some(clap::builder::PossibleValue::new("arm")),
-            Arch:: Arm64 => Some(clap::builder::PossibleValue::new("arm64")),
-            Arch:: X86 => Some(clap::builder::PossibleValue::new("x86")),
-            Arch:: X86_64 => Some(clap::builder::PossibleValue::new("x86_64")),
-            Arch:: Mips => Some(clap::builder::PossibleValue::new("mips")),
-            Arch:: Mips64 => Some(clap::builder::PossibleValue::new("mips64")),
-            Arch:: PowerPc => Some(clap::builder::PossibleValue::new("powerpc")),
-            Arch:: PowerPc64 => Some(clap::builder::PossibleValue::new("powerpc64")),
-            Arch:: Riscv32 => Some(clap::builder::PossibleValue::new("riscv")),
-            Arch:: Riscv64 => Some(clap::builder::PossibleValue::new("riscv64")),
-            Arch:: Sparc64 => Some(clap::builder::PossibleValue::new("sparc64")),
-            Arch:: SysZ => Some(clap::builder::PossibleValue::new("sysz"))
+            Arch::Arm => Some(clap::builder::PossibleValue::new("arm")),
+            Arch::Arm64 => Some(clap::builder::PossibleValue::new("arm64")),
+            Arch::X86 => Some(clap::builder::PossibleValue::new("x86")),
+            Arch::X86_64 => Some(clap::builder::PossibleValue::new("x86_64")),
+            Arch::Mips => Some(clap::builder::PossibleValue::new("mips")),
+            Arch::Mips64 => Some(clap::builder::PossibleValue::new("mips64")),
+            Arch::PowerPc => Some(clap::builder::PossibleValue::new("powerpc")),
+            Arch::PowerPc64 => Some(clap::builder::PossibleValue::new("powerpc64")),
+            Arch::Riscv32 => Some(clap::builder::PossibleValue::new("riscv")),
+            Arch::Riscv64 => Some(clap::builder::PossibleValue::new("riscv64")),
+            Arch::Sparc64 => Some(clap::builder::PossibleValue::new("sparc64")),
+            Arch::SysZ => Some(clap::builder::PossibleValue::new("sysz")),
         }
-        
     }
 }
