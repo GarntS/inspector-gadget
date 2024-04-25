@@ -7,7 +7,7 @@
 use capstone::{Capstone, InsnGroupId, InsnGroupType, InsnId};
 use capstone::arch::{self, BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode, BuildsCapstoneSyntax};
 use capstone::arch::ppc::PpcInsn;
-use crate::arch::Arch;
+use crate::arch::{Arch, Endianness};
 use crate::cli_args::GadgetConstraints;
 
 // constant-valued Capstone group IDS
@@ -17,39 +17,33 @@ const RET_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_RET as u8);
 const REL_BR_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE as u8);
 
 // init_capstone() constructs a Capstone object for the correct arch
-pub fn init_capstone(arch: Arch, endianness: object::Endianness, enable_detail: bool) -> Result<Capstone, String> {
-    // translate object::Endianness to capstone::Endian
-    let obj_end: capstone::Endian = match endianness {
-        object::Endianness::Big => capstone::Endian::Big,
-        object::Endianness::Little => capstone::Endian::Little,
-    };
-
+pub fn init_capstone(arch: Arch, endianness: Endianness, enable_detail: bool) -> Result<Capstone, String> {
     match arch {
         Arch::Arm64 => Ok(Capstone::new()
             .arm64()
             .mode(arch::arm64::ArchMode::Arm)
-            .endian(obj_end)
+            .endian(endianness.to_cs_endian())
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for arm64!")),
         Arch::Arm => Ok(Capstone::new()
             .arm()
             .mode(arch::arm::ArchMode::Arm)
-            .endian(obj_end)
+            .endian(endianness.to_cs_endian())
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for arm!")),
         Arch::Mips64 => Ok(Capstone::new()
             .mips()
             .mode(arch::mips::ArchMode::Mips64)
-            .endian(obj_end)
+            .endian(endianness.to_cs_endian())
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for mips64!")),
         Arch::Mips => Ok(Capstone::new()
             .mips()
             .mode(arch::mips::ArchMode::Mips32)
-            .endian(obj_end)
+            .endian(endianness.to_cs_endian())
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for mips!")),
@@ -57,7 +51,7 @@ pub fn init_capstone(arch: Arch, endianness: object::Endianness, enable_detail: 
             .riscv()
             .mode(arch::riscv::ArchMode::RiscV64)
             .extra_mode(std::iter::once(arch::riscv::ArchExtraMode::RiscVC))
-            .endian(obj_end)
+            .endian(endianness.to_cs_endian())
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for riscv64!")),
@@ -65,14 +59,14 @@ pub fn init_capstone(arch: Arch, endianness: object::Endianness, enable_detail: 
             .riscv()
             .mode(arch::riscv::ArchMode::RiscV32)
             .extra_mode(std::iter::once(arch::riscv::ArchExtraMode::RiscVC))
-            .endian(obj_end)
+            .endian(endianness.to_cs_endian())
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for riscv32!")),
         Arch::PowerPc64 => Ok(Capstone::new()
             .ppc()
             .mode(arch::ppc::ArchMode::Mode64)
-            .endian(obj_end)
+            .endian(endianness.to_cs_endian())
             .detail(enable_detail)
             .build()
             .expect("Failed to create Capstone object for powerpc64!")),

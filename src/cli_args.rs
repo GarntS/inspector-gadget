@@ -37,7 +37,7 @@ pub struct CLIArgs {
     pub arch: Option<Arch>,
 
     // override for input binary endianness
-    #[arg(long, value_enum, default_value_t = Endianness::Little)]
+    #[arg(long, default_value_t = Endianness::Little)]
     pub endianness: Endianness,
 
     //

@@ -5,18 +5,17 @@
                 information and converting to other formats.
  */
 
-use clap::ValueEnum;
 use std::fmt;
 
 // Endianness refers to a specific architecture
-#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 pub enum Endianness {
     Big,
     Little
 }
 
 // Arch refers to a specific architecture
-#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arch {
     Arm,
     Arm64,
@@ -36,6 +35,7 @@ pub enum Arch {
 impl Endianness {
     // from_cs_endian() returns the corresponding Endianness for a given
     // capstone::Endian
+    #[allow(dead_code)]
     pub fn from_cs_endian(endian: capstone::Endian) -> Self {
         match endian {
             capstone::Endian::Big => Endianness::Big,
@@ -63,6 +63,7 @@ impl Endianness {
 
     // to_obj_endianness() returns the corresponding object::Endianness for
     // this Endianness.
+    #[allow(dead_code)]
     pub fn to_obj_endianness(&self) -> object::Endianness {
         match self {
             Endianness::Big => object::Endianness::Big,
@@ -75,8 +76,8 @@ impl Endianness {
 impl fmt::Display for Endianness {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Endianness::Big => write!(f, "big-endian"),
-            Endianness::Little => write!(f, "little-endian"),
+            Endianness::Big => write!(f, "big"),
+            Endianness::Little => write!(f, "little"),
         }
     }
 }
@@ -106,6 +107,7 @@ impl Arch {
 
     // to_obj_arch() returns the corresponding object::Architecture for this
     // Arch
+    #[allow(dead_code)]
     pub fn to_obj_arch(&self) -> object::Architecture {
         match self {
             Arch::Arm64 => object::Architecture::Aarch64,
@@ -155,5 +157,46 @@ impl fmt::Display for Arch {
             Arch:: Sparc64 => write!(f, "sparc64"),
             Arch:: SysZ => write!(f, "systemz"),
         }
+    }
+}
+
+// impl clap::ValueEnum for Arch
+impl clap::ValueEnum for Arch {
+    // value_variants() returns a slice referencing every possible enum value,
+    // in order
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Arch::Arm,
+            Arch::Arm64,
+            Arch::X86,
+            Arch::X86_64,
+            Arch::Mips,
+            Arch::Mips64,
+            Arch::PowerPc,
+            Arch::PowerPc64,
+            Arch::Riscv32,
+            Arch::Riscv64,
+            Arch::Sparc64,
+            Arch::SysZ
+        ]
+    }
+
+    // to_possible_value() returns a clap::builder::PossibleValue for a provided
+    // Arch ref
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        match self {
+            Arch:: Arm => Some(clap::builder::PossibleValue::new("arm")),
+            Arch:: Arm64 => Some(clap::builder::PossibleValue::new("arm64")),
+            Arch:: X86 => Some(clap::builder::PossibleValue::new("x86")),
+            Arch:: X86_64 => Some(clap::builder::PossibleValue::new("x86_64")),
+            Arch:: Mips => Some(clap::builder::PossibleValue::new("mips")),
+            Arch:: Mips64 => Some(clap::builder::PossibleValue::new("mips64")),
+            Arch:: PowerPc => Some(clap::builder::PossibleValue::new("powerpc")),
+            Arch:: PowerPc64 => Some(clap::builder::PossibleValue::new("powerpc64")),
+            Arch:: Riscv32 => Some(clap::builder::PossibleValue::new("riscv")),
+            Arch:: Riscv64 => Some(clap::builder::PossibleValue::new("riscv64")),
+            Arch:: Sparc64 => Some(clap::builder::PossibleValue::new("sparc64")),
+            Arch:: SysZ => Some(clap::builder::PossibleValue::new("sysz"))
+        }
+        
     }
 }

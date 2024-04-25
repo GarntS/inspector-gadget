@@ -9,22 +9,22 @@ mod capstone_tools;
 mod cli_args;
 mod gadget_tree;
 
-use arch::Arch;
 use capstone::Capstone;
 use clap::Parser;
-use cli_args::{CLIArgs, GadgetConstraints};
-use gadget_tree::GadgetTree;
+use crate::arch::{Arch, Endianness};
+use crate::cli_args::{CLIArgs, GadgetConstraints};
+use crate::capstone_tools::{is_terminating_insn, GadgetSearchInsnInfo};
+use crate::gadget_tree::GadgetTree;
 use indicatif::{ParallelProgressIterator, ProgressIterator};
 use itertools::Itertools;
 use object::{Object, ObjectSection, ObjectSegment};
 use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
 use regex::Regex;
 use std::sync::Mutex;
-use capstone_tools::{is_terminating_insn, GadgetSearchInsnInfo};
 
 // find_gadget() finds a single gadget and returns the string representation
 // of its mnemonics if one is found.
-fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: object::Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
+fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: Endianness, constraints: GadgetConstraints) -> Option<(usize, Vec<&[u8]>)> {
     // init capstone and use it to do the disassembly
     let cs: Capstone = capstone_tools::init_capstone(arch, endianness, true).unwrap();
     let insns = cs.disasm_all(search_bytes, addr as u64)
@@ -71,7 +71,7 @@ fn find_gadget(search_bytes: &[u8], addr: usize, arch: Arch, endianness: object:
 
 // get_gadget_mnemonic() returns an owned string representing the concatenated
 // mnemonics of the provided gadget bytes
-fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: Arch, endianness: object::Endianness) -> String {
+fn get_gadget_mnemonic(gadget_bytes: &[u8], gadget_addr: usize, arch: Arch, endianness: Endianness) -> String {
     // init capstone and use it to do the disassembly
     let cs: Capstone = capstone_tools::init_capstone(arch, endianness, false).unwrap();
     let insns = cs.disasm_all(gadget_bytes, gadget_addr as u64)
@@ -110,14 +110,16 @@ fn main() -> Result<(), String> {
     // the variables we need for gadget-finding
     let bin_data: Vec<u8>;
     let bin_arch: Arch;
-    let bin_endianness: object::Endianness;
-    let search_regions: Vec<(usize, usize, Option<std::string::String>, &[u8])>;
+    let bin_endianness: Endianness;
+    let mut search_regions: Vec<(usize, usize, Option<std::string::String>, &[u8])>;
 
     // if raw binary, don't parse the binary
     if cli_args.raw_binary {
         bin_data = std::fs::read(cli_args.bin_path).unwrap();
         bin_arch = cli_args.arch.expect("arch should always be set for raw bins");
         bin_endianness = cli_args.endianness;
+        search_regions = Vec::new();
+        search_regions.push((0x0, bin_data.len(), None, bin_data.as_slice()));
 
     // otherwise, assume it's a "standard" object file
     } else {
@@ -127,7 +129,7 @@ fn main() -> Result<(), String> {
 
         // grab the binary file's architecture and address size
         bin_arch = Arch::from_obj_arch(bin_file.architecture());
-        bin_endianness = bin_file.endianness();
+        bin_endianness = Endianness::from_obj_endianness(bin_file.endianness());
         println!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
 
         // generate a list of 3-tuples of all the executable segments/sections in
@@ -317,7 +319,7 @@ fn main() -> Result<(), String> {
     // TODO(garnt): print em all
     // print the first 10 mnemonics
     for mnemonic in mnemonics.iter().take(10) {
-        //println!("{:02x?}: {}", mnemonic.1, mnemonic.0);
+        println!("{:02x?}: {}", mnemonic.1, mnemonic.0);
     }
 
     // Return something to satiate the compiler
