@@ -20,6 +20,8 @@ use itertools::Itertools;
 use object::{Object, ObjectSection, ObjectSegment};
 use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
 use regex::Regex;
+use std::io::Write;
+use std::{fs, io};
 use std::sync::Mutex;
 
 // find_gadget() finds a single gadget and returns the string representation
@@ -107,6 +109,23 @@ fn main() -> Result<(), String> {
         None => Mutex::new(Regex::new(r"^$").expect("Failed to compile regex!")),
     };
 
+    // figure out if an out_file was specified and if it exists
+    let mut use_out_file: bool = false;
+    if let Some(out_file_path) = &cli_args.out_file {
+        // if the out_file is a directory, refuse to overwrite it
+        if out_file_path.is_dir() {
+            return Err(format!("Refusing to overwrite {}, which is a directory. Exiting...", out_file_path.to_str().unwrap()));
+        }
+
+        // if the out_file already exists, make sure --overwrite was passed
+        if out_file_path.exists() && !cli_args.overwrite {
+            return Err("Refusing to overwrite out_file without --overwrite! Exiting...".to_owned());
+        }
+
+        // if we got here, we're good to use the file
+        use_out_file = true;
+    }
+
     // the variables we need for gadget-finding
     let bin_data: Vec<u8>;
     let bin_arch: Arch;
@@ -115,7 +134,7 @@ fn main() -> Result<(), String> {
 
     // if raw binary, don't parse the binary
     if cli_args.raw_binary {
-        bin_data = std::fs::read(cli_args.bin_path).unwrap();
+        bin_data = fs::read(cli_args.bin_path).unwrap();
         bin_arch = cli_args.arch.expect("arch should always be set for raw bins");
         bin_endianness = cli_args.endianness;
         search_regions = Vec::new();
@@ -124,13 +143,13 @@ fn main() -> Result<(), String> {
     // otherwise, assume it's a "standard" object file
     } else {
         // read the binary file into memory, then parse it
-        bin_data = std::fs::read(cli_args.bin_path).unwrap();
+        bin_data = fs::read(cli_args.bin_path).unwrap();
         let bin_file = object::File::parse(&*bin_data).unwrap();
 
         // grab the binary file's architecture and address size
         bin_arch = Arch::from_obj_arch(bin_file.architecture());
         bin_endianness = Endianness::from_obj_endianness(bin_file.endianness());
-        println!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
+        eprintln!("arch: {:?} - endianness: {:?}", bin_arch, bin_endianness);
 
         // generate a list of 3-tuples of all the executable segments/sections in
         // the provided binary
@@ -235,7 +254,7 @@ fn main() -> Result<(), String> {
         // actually do the gadget search.
         let gadget_starts = capstone_tools::valid_gadget_start_addrs(bin_arch, region_addr, region_len);
         // TODO(garnt): remove
-        println!("len: {}", gadget_starts.len());
+        eprintln!("len: {}", gadget_starts.len());
         let mut single_gadgets: Vec<(usize, Vec<&[u8]>)> = gadget_starts
             // iterate over the start addresses, parallelizing with rayon
             .par_iter()
@@ -261,9 +280,9 @@ fn main() -> Result<(), String> {
         
         // print the number of gadgets
         if let Some(name) = &region_name {
-            println!("{} gadgets in {}", single_gadgets.len(), name);
+            eprintln!("{} gadgets in {}", single_gadgets.len(), name);
         } else {
-            println!("{} gadgets in unnamed region", single_gadgets.len());
+            eprintln!("{} gadgets in unnamed region", single_gadgets.len());
         }
 
         // add the new gadgets to the tree so we can deduplicate them
@@ -282,7 +301,7 @@ fn main() -> Result<(), String> {
     assert_eq!(n_walked, gadget_tree.size());
 
     // print the number of unique gadgets
-    println!("{} unique gadgets found.", gadgets.len());
+    eprintln!("{} unique gadgets found.", gadgets.len());
 
     // setup progress bar style for mnemonic-finding
     let mnemonic_bar_style = indicatif::ProgressStyle::with_template("Fetching gadget mnemonics: {bar} [{pos}/{len} ({percent}%)] ({elapsed})").unwrap();
@@ -313,13 +332,24 @@ fn main() -> Result<(), String> {
     // if we used a regex, print the number of gadgets remaining after
     // applying it.
     if (&cli_args.regex_str).is_some() {
-        println!("{} unique gadgets after filtering", mnemonics.len());
+        eprintln!("{} unique gadgets after filtering", mnemonics.len());
     }
 
-    // TODO(garnt): print em all
-    // print the first 10 mnemonics
-    for mnemonic in mnemonics.iter().take(10) {
-        println!("{:02x?}: {}", mnemonic.1, mnemonic.0);
+    // if we should write to the out_file, do that
+    if use_out_file {
+        // open the file and wrap it in a BufWriter
+        let out_file = fs::File::create(cli_args.out_file.unwrap()).unwrap();
+        let mut out_writer = io::BufWriter::new(out_file);
+
+        // actually write all the gadgets to the file
+        for mnemonic in mnemonics.iter() {
+            out_writer.write(format!("{:02x?}: {}\n", mnemonic.1, mnemonic.0).as_bytes()).unwrap();
+        }
+    } else {
+        // otherwise, print the mnemonics to stdout
+        for mnemonic in mnemonics.iter() {
+            println!("{:02x?}: {}", mnemonic.1, mnemonic.0);
+        }
     }
 
     // Return something to satiate the compiler

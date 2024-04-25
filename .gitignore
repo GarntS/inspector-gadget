@@ -1,5 +1,8 @@
 # build artifacts
 /target
-
 # test data
 /test_bins
+# perf data
+perf.data
+# .cargo configs
+/.cargo
