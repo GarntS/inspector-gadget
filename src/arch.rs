@@ -5,36 +5,53 @@
             information and converting to other formats.
 */
 
+//! arch contains enum implementations for architecture and endianness used
+//! during disassembly, as well as convenience functions to convert to/from the
+//! corresponding architecture and endianness enums used by other crates.
+
 use std::fmt;
 
-// Endianness refers to a specific architecture
+/// Endianness refers to a machine code endianness used during disassembly.
 #[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 pub enum Endianness {
+    /// Big-Endian byte ordering (MSB-first).
     Big,
+    /// Little-Endian byte ordering (LSB-first).
     Little,
 }
 
-// Arch refers to a specific architecture
+/// Arch refers to a specific machine code architecture used during disassembly.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arch {
+    /// 32-bit ARM variants.
     Arm,
+    /// 64-bit ARM variants.
     Arm64,
+    /// 32-bit x86 variants, including i386, i686, IA-32, etc.
     X86,
+    /// 64-bit x86_64 variants, including x32 and IA-64.
     X86_64,
+    /// 32-bit MIPS variants.
     Mips,
+    /// 64-bit MIPS variants.
     Mips64,
+    /// 32-bit PowerPc variants.
     PowerPc,
+    /// 64-bit PowerPc variants.
     PowerPc64,
+    /// 32-bit register-sized RISC-V variants.
     Riscv32,
+    /// 64-bit register-sized RISC-V variants.
     Riscv64,
+    /// 64-bit SPARC variants.
     Sparc64,
+    /// SystemZ variants, including s390x, etc.
     SysZ,
 }
 
 // Endianness method impls
 impl Endianness {
-    // from_cs_endian() returns the corresponding Endianness for a given
-    // capstone::Endian
+    /// Returns the corresponding Endianness for a given [`capstone::Endian`].
     #[allow(dead_code)]
     pub fn from_cs_endian(endian: capstone::Endian) -> Self {
         match endian {
@@ -43,8 +60,7 @@ impl Endianness {
         }
     }
 
-    // from_obj_endianness() returns the corresponding Endianness for a given
-    // object::Endianness
+    /// Returns the corresponding Endianness for a given [`object::Endianness`].
     pub fn from_obj_endianness(endianness: object::Endianness) -> Self {
         match endianness {
             object::Endianness::Big => Endianness::Big,
@@ -52,8 +68,7 @@ impl Endianness {
         }
     }
 
-    // to_cs_endian() returns the corresponding capstone::Endian for this
-    // Endianness
+    /// Returns the corresponding [`capstone::Endian`] for this Endianness.
     pub fn to_cs_endian(&self) -> capstone::Endian {
         match self {
             Endianness::Big => capstone::Endian::Big,
@@ -61,8 +76,7 @@ impl Endianness {
         }
     }
 
-    // to_obj_endianness() returns the corresponding object::Endianness for
-    // this Endianness.
+    /// Returns the corresponding [`object::Endianness`] for this Endianness.
     #[allow(dead_code)]
     pub fn to_obj_endianness(&self) -> object::Endianness {
         match self {
@@ -84,8 +98,7 @@ impl fmt::Display for Endianness {
 
 // Arch method impls
 impl Arch {
-    // from_obj_arch() returns the corresponding Arch for a given
-    // object::Architecture
+    /// Returns the corresponding Arch for a given [`object::Architecture`].
     pub fn from_obj_arch(arch: object::Architecture) -> Self {
         match arch {
             object::Architecture::Aarch64 | object::Architecture::Aarch64_Ilp32 => Arch::Arm64,
@@ -105,8 +118,7 @@ impl Arch {
         }
     }
 
-    // to_obj_arch() returns the corresponding object::Architecture for this
-    // Arch
+    /// Returns the corresponding [`object::Architecture`] for this Arch.
     #[allow(dead_code)]
     pub fn to_obj_arch(&self) -> object::Architecture {
         match self {
@@ -125,7 +137,7 @@ impl Arch {
         }
     }
 
-    // to_cs_arch() returns the corresponding object::Architecture for this Arch
+    /// Returns the corresponding [`capstone::Arch`] for this Arch.
     pub fn to_cs_arch(&self) -> capstone::Arch {
         match self {
             Arch::Arm64 => capstone::Arch::ARM64,
@@ -162,8 +174,6 @@ impl fmt::Display for Arch {
 
 // impl clap::ValueEnum for Arch
 impl clap::ValueEnum for Arch {
-    // value_variants() returns a slice referencing every possible enum value,
-    // in order
     fn value_variants<'a>() -> &'a [Self] {
         &[
             Arch::Arm,
@@ -181,8 +191,6 @@ impl clap::ValueEnum for Arch {
         ]
     }
 
-    // to_possible_value() returns a clap::builder::PossibleValue for a provided
-    // Arch ref
     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
         match self {
             Arch::Arm => Some(clap::builder::PossibleValue::new("arm")),

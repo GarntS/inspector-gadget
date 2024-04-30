@@ -6,33 +6,42 @@
             strings.
 */
 
+//! gadget_tree contains the [`GadgetTree`] data structure, used to efficiently
+//! store and deduplicate gadgets.
+
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::slice;
 
-// Tree data structure that sorts byte sequences and stores gadget start
-// addresses. The tree and its function are implemented with minimal copying.
+/// Tree implementation that stores gadgets and their start addresses. Each
+/// node in the tree stores a single instruction's opcode bytes and any
+/// addresses at which a gadget that begins with the instruction is located.
+/// Instructions are in reverse sequence from top to bottom as they appear in
+/// gadgets, with each unique terminating instruction acting as the roots of the
+/// tree. The tree and its function are implemented with minimal copying.
 pub struct GadgetTree {
-    // root tree nodes
+    /// [`Vec<T>`] that stores the tree's root nodes.
     roots: Vec<TreeNode>,
-    // # of gadgets stored in the tree
+    /// The number of gadgets stored in the tree.
     n_gadgets: usize,
 }
 
-// A node in the gadget tree. This struct and its functions should not be used
-// directly, GadgetTree wraps this functionality and should be used instead.
+/// A node in the gadget tree. This struct and its functions are only used to
+/// implement the tree and cannot be used directly, [`GadgetTree`] wraps its
+/// functionality and should be used as the external interface.
 struct TreeNode {
-    // bytes for this node in the tree
+    /// [`Box`]ed [`prim@slice`] of bytes containing a single instruction's
+    /// opcode.
     instr_bytes: Box<[u8]>,
-    // child nodes
+    /// [`Vec<T>`] that stores this node's child nodes.
     children: Vec<TreeNode>,
-    // addresses at which a gadget for which this node contains the *ending*
-    // bytes is located.
+    /// [`Vec<T>`] that stores addresses where gadgets which begin with the
+    /// instruction represented by this node is located.
     start_addrs: Vec<usize>,
 }
 
 // GadgetTree method impls
 impl GadgetTree {
-    // new() constructs a new, empty, GadgetTree
+    /// Constructs a new, empty, [`GadgetTree`].
     pub fn new() -> Self {
         GadgetTree {
             roots: Vec::new(),
@@ -40,13 +49,14 @@ impl GadgetTree {
         }
     }
 
-    // size() returns the number of gadgets stored within the tree.
+    /// Returns the number of gadgets stored in this [`GadgetTree`].
     pub fn size(&self) -> usize {
         self.n_gadgets
     }
 
-    // walk_gadgets() walks the tree and returns a vec of pairs of
-    // (byte_str, <slice of start addresses>) for each unique gadget.
+    /// Walks the tree and returns a [`Vec<T>`] of pairs of
+    /// (byte_str, slice of start addresses) for each unique gadget stored
+    /// in the tree.
     pub fn walk_gadgets(&self) -> Vec<(Vec<u8>, &[usize])> {
         // walk each root, collecting all gadgets into a single Vec, and return.
         self.roots
@@ -56,7 +66,7 @@ impl GadgetTree {
             .collect()
     }
 
-    // insert() inserts a new (gadget, addr) pair into the tree.
+    /// Inserts a new (gadget, addr) pair into the tree.
     pub fn insert<'a>(&mut self, gadget: &mut Vec<&[u8]>, addr: usize) -> usize {
         // the gadget should never be empty
         assert!(!gadget.is_empty());
@@ -75,8 +85,7 @@ impl GadgetTree {
         {
             matching_child.insert(gadget, slice::from_ref(&addr));
             return self.n_gadgets;
-        // otherwise,
-        // recurse
+        // otherwise, recurse
         } else {
             // create a new child node for the current instruction and recurse
             let mut new_root = TreeNode {
@@ -97,8 +106,9 @@ impl GadgetTree {
 
 // TreeNode method impls
 impl TreeNode {
-    // walk_gadgets() recursively walks this TreeNode and returns a vec of pairs
-    // of (byte_str, <slice of start addresses>) for each unique gadget.
+    /// Recursively walks this [`TreeNode`] and returns a [`Vec<T>`] of pairs
+    /// of (byte_str, slice of start addresses) for each unique gadget stored
+    /// in the tree.
     fn walk_gadgets(&self) -> Vec<(Vec<u8>, &[usize])> {
         // if this node has no children, it should have start_addrs.
         if self.children.is_empty() {
@@ -134,9 +144,8 @@ impl TreeNode {
         gadgets
     }
 
-    // insert() inserts a new byte string into the tree by splitting
-    // a TreeNode into three TreeNodes in a sub-tree, or by inserting a new
-    // TreeNode after the parent.
+    /// Inserts a new (byte_str of each instruction, address) pair into the
+    /// tree.
     fn insert(&mut self, gadget: &mut Vec<&[u8]>, addrs: &[usize]) {
         // if the current instruction was the last, add the new start
         // addresses to this node and return

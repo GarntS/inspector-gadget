@@ -5,6 +5,11 @@
             disassembly and gadget-finding.
 */
 
+//! disasm_tools contains some functions used during the gadget-finding process
+//! that specifically pertain to disassembly and instruction evaluation. These
+//! functions have been separated into a new module to reduce the amount of
+//! code in main.rs and increase readability.
+
 use crate::arch::{Arch, Endianness};
 use crate::cli_args::GadgetConstraints;
 use capstone::arch::ppc::PpcInsn;
@@ -13,13 +18,33 @@ use capstone::arch::{
 };
 use capstone::{Capstone, InsnGroupId, InsnGroupType, InsnId};
 
-// constant-valued Capstone group IDS
+// constant-valued Capstone group ids for is_terminating_insn() and its
+// architecture-specific variants.
+/// Constant-valued Capstone InsnGroupID for jump instructions.
 const JMP_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_JUMP as u8);
+/// Constant-valued Capstone InsnGroupID for call instructions.
 const CALL_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_CALL as u8);
+/// Constant-valued Capstone InsnGroupID for return instructions.
 const RET_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_RET as u8);
+/// Constant-valued Capstone InsnGroupID for relative branch instructions.
 const REL_BR_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE as u8);
 
-// init_capstone() constructs a Capstone object for the correct arch
+// constant-valued Capstone PPC InsnId's for is_terminating_insn_ppc()
+/// Constant-valued Capstone InsnID for the PowerPC BLR instruction.
+const PPC_BLR_ID: InsnId = InsnId(PpcInsn::PPC_INS_BLR as u32);
+
+// constant-valued Capstone SYSZ InsnId's for is_terminating_insn_sysz().
+/// Constant-valued Capstone InsnID for the SystemZ BAL instruction.
+const SYSZ_BAL_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BAL as u32);
+/// Constant-valued Capstone InsnID for the SystemZ BAS instruction.
+const SYSZ_BAS_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BAS as u32);
+/// Constant-valued Capstone InsnID for the SystemZ BRASL instruction.
+const SYSZ_BRASL_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BRASL as u32);
+/// Constant-valued Capstone InsnID for the SystemZ BRAS instruction.
+const SYSZ_BRAS_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BRAS as u32);
+
+/// Constructs a Capstone object with the provided [`Arch`], [`Endianness`],
+/// and detail values, with sane defaults for arch-specific settings.
 pub fn init_capstone(
     arch: Arch,
     endianness: Endianness,
@@ -117,8 +142,9 @@ pub fn init_capstone(
     }
 }
 
-// valid_gadget_start_addrs() returns an owned vec<usize> of all the valid
-// start addresses for a gadget within the given segment.
+/// Returns an owned [`Vec<usize>`] of all the valid start addresses for a
+/// gadget with the given [`Arch`] within the memory region defined by the
+/// provided start address and size.
 pub fn valid_gadget_start_addrs(
     arch: Arch,
     region_start_addr: usize,
@@ -150,22 +176,20 @@ pub fn valid_gadget_start_addrs(
         .collect()
 }
 
-// GadgetSearchInsnInfo contains information about whether the current
-// instruction would terminate a gadget search, and if the resulting gadget
-// remains valid.
+/// GadgetSearchInsnInfo contains information about whether the current
+/// instruction would terminate a gadget search, and if the resulting gadget
+/// remains valid.
 #[derive(Clone, Copy, Debug)]
 pub struct GadgetSearchInsnInfo {
-    // true if this instruction should terminate the search
+    /// True if this instruction should terminate the search.
     pub is_terminating: bool,
-    // true if the gadget is a valid gadget if this instruction is added to it
+    /// True if the gadget is a valid gadget if this instruction is added to it.
     pub is_valid_gadget: bool,
 }
 
-// constant-valued Capstone PPC InsnId's
-const PPC_BLR_ID: InsnId = InsnId(PpcInsn::PPC_INS_BLR as u32);
-
-// is_terminating_insn_ppc() does the is_terminating_insn() evaluation for
-// the passed ppc instruction.
+/// Performs the [`is_terminating_insn()`] evaluation for the passed (32 or
+/// 64-bit) PowerPC instruction, returning a [`GadgetSearchInsnInfo`]
+/// representing its findings.
 fn is_terminating_insn_ppc(
     insn: &capstone::Insn,
     detail: &capstone::InsnDetail,
@@ -237,16 +261,14 @@ fn is_terminating_insn_ppc(
     }
 }
 
-// is_terminating_insn_riscv() does the is_terminating_insn() evaluation for
-// the passed riscv instruction.
+/// Performs the [`is_terminating_insn()`] evaluation for the passed (32 or
+/// 64-bit) RISC-V instruction, returning a [`GadgetSearchInsnInfo`] 
+/// representing its findings.
 fn is_terminating_insn_riscv(
     insn: &capstone::Insn,
     detail: &capstone::InsnDetail,
     constraints: &GadgetConstraints,
 ) -> GadgetSearchInsnInfo {
-    // TODO(garnt): remove
-    //println!("bytes: {:x?}(len {})", insn.bytes(), insn.bytes().len());
-
     // relative branches are always direct jumps and therefore not allowed
     if detail.groups().contains(&REL_BR_GRP_ID) {
         return GadgetSearchInsnInfo {
@@ -318,14 +340,8 @@ fn is_terminating_insn_riscv(
     }
 }
 
-// constant-valued Capstone SYSZ InsnId's
-const SYSZ_BAL_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BAL as u32);
-const SYSZ_BAS_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BAS as u32);
-const SYSZ_BRASL_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BRASL as u32);
-const SYSZ_BRAS_ID: InsnId = InsnId(capstone_sys::sysz_insn::SYSZ_INS_BRAS as u32);
-
-// is_terminating_insn_sysz() does the is_terminating_insn() evaluation for
-// the passed sysz instruction.
+/// Performs the [`is_terminating_insn()`] evaluation for the passed SystemZ
+/// instruction, returning a [`GadgetSearchInsnInfo`] representing its findings.
 fn is_terminating_insn_sysz(
     insn: &capstone::Insn,
     detail: &capstone::InsnDetail,
@@ -377,9 +393,9 @@ fn is_terminating_insn_sysz(
     }
 }
 
-// is_terminating_insn() evaluates whether a given instruction terminates the
-// current gadget being searched for, and if the gadget is a valid gadget after
-// the current instruction is included in it.
+/// Evaluates whether a given instruction would terminate a gadget search, and
+/// additionally if the gadget being searched for would remain a valid gadget
+/// after appending the instruction.
 pub fn is_terminating_insn(
     insn: &capstone::Insn,
     detail: &capstone::InsnDetail,

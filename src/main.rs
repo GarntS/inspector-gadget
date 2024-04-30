@@ -1,17 +1,37 @@
 /*  file:   main.rs
     author: garnt
     date:   04/15/2024
-    desc:   Entrypoint for inspector_gadget.
+    desc:   Entrypoint for inspector-gadget.
 */
 
+//! A cli-based, multi-architecture gadget-finding tool, designed for fast
+//! operation, even with large binaries like browser engines and OS kernels.
+//!
+//! # Usage
+//!
+//! The minimal invocation of `inspector-gadget` is very simple:
+//! ```bash
+//! inspector-gadget /usr/bin/grep
+//! ```
+//! `inspector-gadget`'s default behavior is to:
+//! 1. Parse the input binary, which is assumed to be an object file.
+//! 2. Find every gadget in sections and segments marked as executable, by
+//! default finding only gadgets ending with a return instruction.
+//! 3. De-duplicate the gadgets.
+//! 4. Print to `stdout` the gadget mnemonic and the list of start addresses
+//! for each unique gadget that was found.
+//!
+//! For more info, see [README.md](https://github.com/garnts/inspector-gadget).
+//!
+
 mod arch;
-mod disasm_tools;
 mod cli_args;
+mod disasm_tools;
 mod gadget_tree;
 
 use crate::arch::{Arch, Endianness};
-use crate::disasm_tools::{is_terminating_insn, GadgetSearchInsnInfo};
 use crate::cli_args::{CLIArgs, GadgetConstraints};
+use crate::disasm_tools::{is_terminating_insn, GadgetSearchInsnInfo};
 use crate::gadget_tree::GadgetTree;
 use capstone::Capstone;
 use clap::Parser;
@@ -20,21 +40,22 @@ use itertools::Itertools;
 use object::{Object, ObjectSection, ObjectSegment};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
+use std::cell::RefCell;
 use std::io::Write;
 use std::sync::Mutex;
 use std::{fs, io};
 
-// find_gadget() finds a single gadget and returns the string representation
-// of its mnemonics if one is found.
-fn find_gadget(
-    search_bytes: &[u8],
+/// find_gadget() searches for a single gadget, starting at the beginning of
+/// the search bytes, and disassembling forwards until a complete gadget is
+/// found or the search finds an instruction that ends it unsuccessfully.
+fn find_gadget<'a>(
+    search_bytes: &'a [u8],
     addr: usize,
+    cs: &Capstone,
     arch: Arch,
-    endianness: Endianness,
     constraints: GadgetConstraints,
-) -> Option<(usize, Vec<&[u8]>)> {
-    // init capstone and use it to do the disassembly
-    let cs: Capstone = disasm_tools::init_capstone(arch, endianness, true).unwrap();
+) -> Option<(usize, Vec<&'a [u8]>)> {
+    // use capstone to actually do the disassembly
     let insns = cs
         .disasm_all(search_bytes, addr as u64)
         .expect("Capstone failed disassembly!");
@@ -81,14 +102,14 @@ fn find_gadget(
     None
 }
 
-// get_gadget_mnemonic() returns an owned string representing the concatenated
-// mnemonics of the provided gadget bytes
+/// get_gadget_mnemonic() returns an owned string representing the concatenated
+/// mnemonics of the provided gadget's bytes.
 fn get_gadget_mnemonic(
     gadget_bytes: &[u8],
     gadget_addr: usize,
     arch: Arch,
     endianness: Endianness,
-) -> String {
+) -> Result<String, String> {
     // init capstone and use it to do the disassembly
     let cs: Capstone = disasm_tools::init_capstone(arch, endianness, false).unwrap();
     let insns = cs
@@ -97,7 +118,7 @@ fn get_gadget_mnemonic(
 
     // iterate over the provided instructions, looking for a gadget-terminating
     // instruction to end the sequence.
-    insns
+    match insns
         .iter()
         .map(|insn| {
             // grab an owned copy of the operand's mnemonic
@@ -110,10 +131,16 @@ fn get_gadget_mnemonic(
             mnemonic
         })
         .reduce(|acc, str| format!("{acc}; {str}"))
-        .unwrap_or_default()
+    {
+        Some(mnemonic_string) => Ok(mnemonic_string),
+        None => Err(format!(
+            "Failed to get mnemonic for gadget at addr: {:x}",
+            gadget_addr
+        )),
+    }
 }
 
-// main() is the entrypoint.
+/// The entrypoint.
 fn main() -> Result<(), String> {
     // parse cli args and gadget constraints
     let cli_args = CLIArgs::parse();
@@ -282,8 +309,25 @@ fn main() -> Result<(), String> {
         // actually do the gadget search.
         let gadget_starts =
             disasm_tools::valid_gadget_start_addrs(bin_arch, region_addr, region_len);
-        // TODO(garnt): remove
-        eprintln!("len: {}", gadget_starts.len());
+
+        // create a variable stored in TLS to store a reference to a
+        // thread-unique Capstone object. Instantiate it with a placeholder
+        // that can be constructed statically.
+        thread_local!(static THREAD_LOCAL_CS: RefCell<Capstone> = RefCell::new(
+            Capstone::new_raw(capstone::Arch::ARM,
+                capstone::Mode::Arm,
+                std::iter::empty(),
+                None).unwrap()
+        ));
+
+        // broadcast to each thread in the global rayon thread pool, telling
+        // them to replace their thread-unique Capstone objects with one that
+        // has the correct parameters.
+        rayon::broadcast(|_| {
+            THREAD_LOCAL_CS
+                .set(disasm_tools::init_capstone(bin_arch, bin_endianness, true).unwrap())
+        });
+
         let mut single_gadgets: Vec<(usize, Vec<&[u8]>)> = gadget_starts
             // iterate over the start addresses, parallelizing with rayon
             .par_iter()
@@ -301,13 +345,15 @@ fn main() -> Result<(), String> {
             })
             // actually disassemble and attempt to find a gadget
             .map(|ofs_range| {
-                find_gadget(
-                    &region_data[ofs_range.0..ofs_range.1],
-                    ofs_range.0 + region_addr,
-                    bin_arch,
-                    bin_endianness,
-                    gadget_constraints,
-                )
+                THREAD_LOCAL_CS.with_borrow(|cs_ref| {
+                    find_gadget(
+                        &region_data[ofs_range.0..ofs_range.1],
+                        ofs_range.0 + region_addr,
+                        cs_ref,
+                        bin_arch,
+                        gadget_constraints,
+                    )
+                })
             })
             // filter out None results
             .flatten()
@@ -358,7 +404,7 @@ fn main() -> Result<(), String> {
         // actually disassemble and attempt to find a gadget
         .map(|pair| {
             (
-                get_gadget_mnemonic(pair.0.as_ref(), pair.1[0], bin_arch, bin_endianness),
+                get_gadget_mnemonic(pair.0.as_ref(), pair.1[0], bin_arch, bin_endianness).unwrap(),
                 pair.1,
             )
         })
@@ -381,23 +427,21 @@ fn main() -> Result<(), String> {
         eprintln!("{} unique gadgets after filtering", mnemonics.len());
     }
 
-    // if we should write to the out_file, do that
-    if use_out_file {
-        // open the file and wrap it in a BufWriter
-        let out_file = fs::File::create(cli_args.out_file.unwrap()).unwrap();
-        let mut out_writer = io::BufWriter::new(out_file);
+    // TODO(garnt): add flag to find function names per-gadget using symbols
 
-        // actually write all the gadgets to the file
-        for mnemonic in mnemonics.iter() {
-            out_writer
-                .write(format!("{:02x?}: {}\n", mnemonic.1, mnemonic.0).as_bytes())
-                .unwrap();
-        }
+    // if we should write to the out_file, do that, otherwise, write to stdout
+    let out_dest: Box<dyn std::io::Write> = if use_out_file {
+        Box::new(fs::File::create(cli_args.out_file.unwrap()).unwrap())
     } else {
-        // otherwise, print the mnemonics to stdout
-        for mnemonic in mnemonics.iter() {
-            println!("{:02x?}: {}", mnemonic.1, mnemonic.0);
-        }
+        Box::new(std::io::stdout())
+    };
+    let mut out_writer = io::BufWriter::new(out_dest);
+
+    // actually write all the gadgets to the file
+    for mnemonic in mnemonics.iter() {
+        out_writer
+            .write(format!("{:02x?}: {}\n", mnemonic.1, mnemonic.0).as_bytes())
+            .unwrap();
     }
 
     // Return something to satiate the compiler
