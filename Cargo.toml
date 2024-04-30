@@ -10,7 +10,8 @@ documentation = "https://github.com/garnts/inspector-gadget"
 homepage = "https://github.com/garnts/inspector-gadget"
 repository = "https://github.com/garnts/inspector-gadget"
 keywords = ["gadget", "rop"]
-license = "GPLv3"
+license = "GPL-3.0"
+license-file = "LICENSE"
 edition = "2021"
 
 [dependencies]
