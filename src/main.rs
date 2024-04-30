@@ -427,7 +427,7 @@ fn main() -> Result<(), String> {
         eprintln!("{} unique gadgets after filtering", mnemonics.len());
     }
 
-    // TODO(garnt): add flag to find function names per-gadget using symbols
+    // (garnt): add flag to find function names per-gadget using symbols
 
     // if we should write to the out_file, do that, otherwise, write to stdout
     let out_dest: Box<dyn std::io::Write> = if use_out_file {

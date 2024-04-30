@@ -12,9 +12,10 @@
 
 use crate::arch::{Arch, Endianness};
 use crate::cli_args::GadgetConstraints;
+use capstone::arch::arm::{ArmInsn, ArmOperandType};
 use capstone::arch::ppc::PpcInsn;
 use capstone::arch::{
-    BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode, BuildsCapstoneSyntax,
+    BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode, BuildsCapstoneSyntax, DetailsArchInsn,
 };
 use capstone::{Capstone, InsnGroupId, InsnGroupType, InsnId};
 
@@ -28,6 +29,22 @@ const CALL_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_CALL as u8);
 const RET_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_RET as u8);
 /// Constant-valued Capstone InsnGroupID for relative branch instructions.
 const REL_BR_GRP_ID: InsnGroupId = InsnGroupId(InsnGroupType::CS_GRP_BRANCH_RELATIVE as u8);
+
+// constant-valued Capstone ARM InsnId's for is_terminating_insn_arm()
+/// Constant-valued Capstone InsnID for the ARM BX instruction.
+const ARM_BX_ID: InsnId = InsnId(ArmInsn::ARM_INS_BX as u32);
+/// Constant-valued Capstone InsnID for the ARM BLX instruction.
+const ARM_BLX_ID: InsnId = InsnId(ArmInsn::ARM_INS_BLX as u32);
+/// Constant-valued Capstone InsnID for the ARM POP instruction.
+const ARM_POP_ID: InsnId = InsnId(ArmInsn::ARM_INS_POP as u32);
+/// Constant-valued Capstone RegID for the ARM PC register.
+const ARM_PC_OPTYPE: ArmOperandType = ArmOperandType::Reg(
+    capstone::RegId(capstone::arch::arm::ArmReg::ARM_REG_PC as u16)
+);
+/// Constant-valued Capstone RegID for the ARM LR register.
+const ARM_LR_OPTYPE: ArmOperandType = ArmOperandType::Reg(
+    capstone::RegId(capstone::arch::arm::ArmReg::ARM_REG_LR as u16)
+);
 
 // constant-valued Capstone PPC InsnId's for is_terminating_insn_ppc()
 /// Constant-valued Capstone InsnID for the PowerPC BLR instruction.
@@ -185,6 +202,99 @@ pub struct GadgetSearchInsnInfo {
     pub is_terminating: bool,
     /// True if the gadget is a valid gadget if this instruction is added to it.
     pub is_valid_gadget: bool,
+}
+
+/// Performs the [`is_terminating_insn()`] evaluation for the passed 32-bit ARM
+/// instruction, returning a [`GadgetSearchInsnInfo`] representing its findings.
+fn is_terminating_insn_arm(
+    insn: &capstone::Insn,
+    detail: &capstone::InsnDetail,
+    constraints: &GadgetConstraints,
+) -> GadgetSearchInsnInfo {
+    // relative branches are always direct jumps and therefore not allowed
+    /*if detail.groups().contains(&REL_BR_GRP_ID) {
+        return GadgetSearchInsnInfo {
+            is_terminating: true,
+            is_valid_gadget: false,
+        };
+    }*/
+
+    // check to see if this instruction is a ret. ARM function returns seem to
+    // come in the following flavors:
+    // pop {pc[, ...]} (technically STMDB SP!,{pc[, ...]} but capstone is nice)
+    // b{l}x lr
+    if constraints.allow_terminating_ret  {
+        match insn.id() {
+            ARM_BX_ID | ARM_BLX_ID => {
+                // if we read from the register lr, it's a ret
+                if detail.arch_detail().arm().unwrap().operands().any(|op| op.op_type == ARM_LR_OPTYPE) {
+                    return GadgetSearchInsnInfo {
+                        is_terminating: true,
+                        is_valid_gadget: true,
+                    };
+                }
+            },
+            ARM_POP_ID => {
+                // if we write to the register PC, it's a ret
+                if detail.arch_detail().arm().unwrap().operands().any(|op| op.op_type == ARM_PC_OPTYPE) {
+                    return GadgetSearchInsnInfo {
+                        is_terminating: true,
+                        is_valid_gadget: true,
+                    };
+                }
+            },
+            _ => {}
+        }
+    }
+
+    // check if this instruction is a call
+    if detail.groups().contains(&CALL_GRP_ID) {
+        // if a register wasn't read, it's a direct call, which can't exist
+        // in the middle of a gadget
+        if detail.regs_read().len() == 0 {
+            return GadgetSearchInsnInfo {
+                is_terminating: true,
+                is_valid_gadget: false,
+            };
+        // if a register was read, and terminating calls are allowed,
+        // terminate the gadget
+        } else if constraints.allow_terminating_call {
+            return GadgetSearchInsnInfo {
+                is_terminating: true,
+                is_valid_gadget: true,
+            };
+        }
+    }
+
+    // check if this instruction is a jump
+    if detail.groups().contains(&JMP_GRP_ID) {
+        // if a register wasn't read, we need to check if this instruction
+        // is a direct jump, which can't exist in the middle of a gadget
+        if detail.regs_read().len() == 0 {
+            // if a register wasn't read and there's no immediate, which
+            // would be stored in the op_str, it's a direct jump
+            if insn.op_str().is_none() {
+                return GadgetSearchInsnInfo {
+                    is_terminating: true,
+                    is_valid_gadget: false,
+                };
+            }
+        // if a register was read, and terminating jumps are allowed,
+        // terminate the gadget
+        } else if constraints.allow_terminating_jmp {
+            // if the gadget length is valid, the gadget is valid
+            return GadgetSearchInsnInfo {
+                is_terminating: true,
+                is_valid_gadget: true,
+            };
+        }
+    }
+
+    // for any non-terminating instructions, signal to continue the search
+    GadgetSearchInsnInfo {
+        is_terminating: false,
+        is_valid_gadget: true,
+    }
 }
 
 /// Performs the [`is_terminating_insn()`] evaluation for the passed (32 or
@@ -408,7 +518,8 @@ pub fn is_terminating_insn(
     // don't have dedicated ret instructions, so we implement this function
     // differently for those architectures.
     match arch {
-        // PPC, RISCV, and S390x don't play nicely.
+        // ARM, PPC, RISCV, and S390x don't play nicely.
+        Arch::Arm => is_terminating_insn_arm(insn, detail, &constraints),
         Arch::PowerPc | Arch::PowerPc64 => is_terminating_insn_ppc(insn, detail, &constraints),
         Arch::Riscv32 | Arch::Riscv64 => is_terminating_insn_riscv(insn, detail, &constraints),
         Arch::SysZ => is_terminating_insn_sysz(insn, detail, &constraints),
