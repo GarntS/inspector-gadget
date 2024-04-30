@@ -15,9 +15,11 @@ use crate::cli_args::GadgetConstraints;
 use capstone::arch::arm::{ArmInsn, ArmOperandType};
 use capstone::arch::ppc::PpcInsn;
 use capstone::arch::{
-    BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode, BuildsCapstoneSyntax, DetailsArchInsn,
+    BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode, BuildsCapstoneSyntax,
+    DetailsArchInsn,
 };
 use capstone::{Capstone, InsnGroupId, InsnGroupType, InsnId};
+use capstone_sys::{cs_close, cs_op_count};
 
 // constant-valued Capstone group ids for is_terminating_insn() and its
 // architecture-specific variants.
@@ -38,13 +40,13 @@ const ARM_BLX_ID: InsnId = InsnId(ArmInsn::ARM_INS_BLX as u32);
 /// Constant-valued Capstone InsnID for the ARM POP instruction.
 const ARM_POP_ID: InsnId = InsnId(ArmInsn::ARM_INS_POP as u32);
 /// Constant-valued Capstone RegID for the ARM PC register.
-const ARM_PC_OPTYPE: ArmOperandType = ArmOperandType::Reg(
-    capstone::RegId(capstone::arch::arm::ArmReg::ARM_REG_PC as u16)
-);
+const ARM_PC_OPTYPE: ArmOperandType = ArmOperandType::Reg(capstone::RegId(
+    capstone::arch::arm::ArmReg::ARM_REG_PC as u16,
+));
 /// Constant-valued Capstone RegID for the ARM LR register.
-const ARM_LR_OPTYPE: ArmOperandType = ArmOperandType::Reg(
-    capstone::RegId(capstone::arch::arm::ArmReg::ARM_REG_LR as u16)
-);
+const ARM_LR_OPTYPE: ArmOperandType = ArmOperandType::Reg(capstone::RegId(
+    capstone::arch::arm::ArmReg::ARM_REG_LR as u16,
+));
 
 // constant-valued Capstone PPC InsnId's for is_terminating_insn_ppc()
 /// Constant-valued Capstone InsnID for the PowerPC BLR instruction.
@@ -193,6 +195,111 @@ pub fn valid_gadget_start_addrs(
         .collect()
 }
 
+/// Returns true if any of the operands for this instruction are registers.
+fn has_register_operand(insn: &capstone::Insn, detail: &capstone::InsnDetail, arch: Arch) -> bool {
+    match arch {
+        Arch::Arm64 => detail.arch_detail().arm64().unwrap().operands().any(|op| {
+            std::mem::discriminant(&op.op_type)
+                == std::mem::discriminant(&capstone::arch::arm64::Arm64OperandType::Reg(
+                    capstone::RegId(0),
+                ))
+        }),
+        Arch::Arm => detail.arch_detail().arm().unwrap().operands().any(|op| {
+            std::mem::discriminant(&op.op_type)
+                == std::mem::discriminant(&capstone::arch::arm::ArmOperandType::Reg(
+                    capstone::RegId(0),
+                ))
+        }),
+        Arch::Mips64 | Arch::Mips => detail.arch_detail().mips().unwrap().operands().any(|op| {
+            std::mem::discriminant(&op)
+                == std::mem::discriminant(&capstone::arch::mips::MipsOperand::Reg(capstone::RegId(
+                    0,
+                )))
+        }),
+        Arch::Riscv64 | Arch::Riscv32 => {
+            detail.arch_detail().riscv().unwrap().operands().any(|op| {
+                std::mem::discriminant(&op)
+                    == std::mem::discriminant(&capstone::arch::riscv::RiscVOperand::Reg(
+                        capstone::RegId(0),
+                    ))
+            })
+        }
+        Arch::PowerPc64 | Arch::PowerPc => {
+            detail.arch_detail().ppc().unwrap().operands().any(|op| {
+                std::mem::discriminant(&op)
+                    == std::mem::discriminant(&capstone::arch::ppc::PpcOperand::Reg(
+                        capstone::RegId(0),
+                    ))
+            })
+        }
+        Arch::X86_64 | Arch::X86 => detail.arch_detail().x86().unwrap().operands().any(|op| {
+            std::mem::discriminant(&op.op_type)
+                == std::mem::discriminant(&capstone::arch::x86::X86OperandType::Reg(
+                    capstone::RegId(0),
+                ))
+        }),
+        Arch::Sparc64 => detail.arch_detail().sparc().unwrap().operands().any(|op| {
+            std::mem::discriminant(&op)
+                == std::mem::discriminant(&capstone::arch::sparc::SparcOperand::Reg(
+                    capstone::RegId(0),
+                ))
+        }),
+        Arch::SysZ => {
+            // for some unknown reason, this api isn't provided for sysz, so we
+            // have to implement it manually using the capstone_sys crate
+            // TODO(garnt): use the capstone crate for this if sysz is ever
+            // fixed
+
+            // call capstone_sys::cs_open() to get a capstone instance
+            let mut sys_cs_handle: Box<capstone_sys::csh> = Box::new(0);
+            let sys_arch: capstone_sys::cs_arch = capstone::Arch::SYSZ.into();
+            let sys_mode: capstone_sys::cs_mode =
+                Into::<capstone::Mode>::into(capstone::arch::sysz::ArchMode::Default).into();
+            let open_err =
+                unsafe { capstone_sys::cs_open(sys_arch, sys_mode, sys_cs_handle.as_mut()) };
+            assert_eq!(open_err, capstone_sys::cs_err::CS_ERR_OK);
+
+            // use capstone_sys to manually disassemble this one instruction
+            let mut sys_insns: *mut capstone_sys::cs_insn = core::ptr::null_mut();
+            let disasm_count = unsafe {
+                capstone_sys::cs_disasm(
+                    *sys_cs_handle.as_ref(),
+                    insn.bytes().as_ptr(),
+                    insn.bytes().len(),
+                    0,
+                    1,
+                    &mut sys_insns,
+                )
+            };
+            assert_eq!(disasm_count, 1);
+
+            // actually iterate through the operands
+            let reg_op_count = unsafe {
+                cs_op_count(
+                    *sys_cs_handle.as_ref(),
+                    sys_insns,
+                    capstone_sys::sysz_op_type::SYSZ_OP_REG as u32,
+                )
+            };
+
+            // manually destruct the capstone object to prevent leaking it
+            let close_err = unsafe { cs_close(sys_cs_handle.as_mut()) };
+            assert_eq!(close_err, capstone_sys::cs_err::CS_ERR_OK);
+
+            // manually free the disassembled instruction buffer
+            unsafe {
+                capstone_sys::cs_free(
+                    std::mem::replace(&mut sys_insns, std::ptr::null_mut()),
+                    disasm_count,
+                );
+            };
+
+            // true if any operands were registers
+            reg_op_count > 0
+        }
+    }
+}
+
 /// GadgetSearchInsnInfo contains information about whether the current
 /// instruction would terminate a gadget search, and if the resulting gadget
 /// remains valid.
@@ -212,37 +319,49 @@ fn is_terminating_insn_arm(
     constraints: &GadgetConstraints,
 ) -> GadgetSearchInsnInfo {
     // relative branches are always direct jumps and therefore not allowed
-    /*if detail.groups().contains(&REL_BR_GRP_ID) {
+    if detail.groups().contains(&REL_BR_GRP_ID) {
         return GadgetSearchInsnInfo {
             is_terminating: true,
             is_valid_gadget: false,
         };
-    }*/
+    }
 
     // check to see if this instruction is a ret. ARM function returns seem to
     // come in the following flavors:
     // pop {pc[, ...]} (technically STMDB SP!,{pc[, ...]} but capstone is nice)
     // b{l}x lr
-    if constraints.allow_terminating_ret  {
+    if constraints.allow_terminating_ret {
         match insn.id() {
             ARM_BX_ID | ARM_BLX_ID => {
                 // if we read from the register lr, it's a ret
-                if detail.arch_detail().arm().unwrap().operands().any(|op| op.op_type == ARM_LR_OPTYPE) {
+                if detail
+                    .arch_detail()
+                    .arm()
+                    .unwrap()
+                    .operands()
+                    .any(|op| op.op_type == ARM_LR_OPTYPE)
+                {
                     return GadgetSearchInsnInfo {
                         is_terminating: true,
                         is_valid_gadget: true,
                     };
                 }
-            },
+            }
             ARM_POP_ID => {
                 // if we write to the register PC, it's a ret
-                if detail.arch_detail().arm().unwrap().operands().any(|op| op.op_type == ARM_PC_OPTYPE) {
+                if detail
+                    .arch_detail()
+                    .arm()
+                    .unwrap()
+                    .operands()
+                    .any(|op| op.op_type == ARM_PC_OPTYPE)
+                {
                     return GadgetSearchInsnInfo {
                         is_terminating: true,
                         is_valid_gadget: true,
                     };
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -251,7 +370,7 @@ fn is_terminating_insn_arm(
     if detail.groups().contains(&CALL_GRP_ID) {
         // if a register wasn't read, it's a direct call, which can't exist
         // in the middle of a gadget
-        if detail.regs_read().len() == 0 {
+        if has_register_operand(insn, detail, Arch::Arm) {
             return GadgetSearchInsnInfo {
                 is_terminating: true,
                 is_valid_gadget: false,
@@ -270,7 +389,7 @@ fn is_terminating_insn_arm(
     if detail.groups().contains(&JMP_GRP_ID) {
         // if a register wasn't read, we need to check if this instruction
         // is a direct jump, which can't exist in the middle of a gadget
-        if detail.regs_read().len() == 0 {
+        if has_register_operand(insn, detail, Arch::Arm) {
             // if a register wasn't read and there's no immediate, which
             // would be stored in the op_str, it's a direct jump
             if insn.op_str().is_none() {
@@ -325,7 +444,7 @@ fn is_terminating_insn_ppc(
     if detail.groups().contains(&CALL_GRP_ID) {
         // if a register wasn't read, it's a direct call, which can't exist
         // in the middle of a gadget
-        if detail.regs_read().len() == 0 {
+        if has_register_operand(insn, detail, Arch::PowerPc) {
             return GadgetSearchInsnInfo {
                 is_terminating: true,
                 is_valid_gadget: false,
@@ -344,7 +463,7 @@ fn is_terminating_insn_ppc(
     if detail.groups().contains(&JMP_GRP_ID) {
         // if a register wasn't read, we need to check if this instruction
         // is a direct jump, which can't exist in the middle of a gadget
-        if detail.regs_read().len() == 0 {
+        if has_register_operand(insn, detail, Arch::PowerPc) {
             // if a register wasn't read and there's no immediate, which
             // would be stored in the op_str, it's a direct jump
             if insn.op_str().is_none() {
@@ -372,7 +491,7 @@ fn is_terminating_insn_ppc(
 }
 
 /// Performs the [`is_terminating_insn()`] evaluation for the passed (32 or
-/// 64-bit) RISC-V instruction, returning a [`GadgetSearchInsnInfo`] 
+/// 64-bit) RISC-V instruction, returning a [`GadgetSearchInsnInfo`]
 /// representing its findings.
 fn is_terminating_insn_riscv(
     insn: &capstone::Insn,
@@ -404,7 +523,7 @@ fn is_terminating_insn_riscv(
     if detail.groups().contains(&CALL_GRP_ID) {
         // if a register wasn't read, it's a direct call, which can't exist
         // in the middle of a gadget
-        if detail.regs_read().len() == 0 {
+        if has_register_operand(insn, detail, Arch::Riscv32) {
             return GadgetSearchInsnInfo {
                 is_terminating: true,
                 is_valid_gadget: false,
@@ -423,7 +542,7 @@ fn is_terminating_insn_riscv(
     if detail.groups().contains(&JMP_GRP_ID) {
         // if a register wasn't read, we need to check if this instruction
         // is a direct jump, which can't exist in the middle of a gadget
-        if detail.regs_read().len() == 0 {
+        if has_register_operand(insn, detail, Arch::Riscv32) {
             // if a register wasn't read and there's no immediate, which
             // would be stored in the op_str, it's a direct jump
             if insn.op_str().is_none() {
@@ -479,7 +598,7 @@ fn is_terminating_insn_sysz(
         SYSZ_BRASL_ID | SYSZ_BRAS_ID => {
             // if a register wasn't read, it's a direct call, which can't exist
             // in the middle of a gadget
-            if detail.regs_read().len() == 0 {
+            if !has_register_operand(insn, detail, Arch::SysZ) {
                 return GadgetSearchInsnInfo {
                     is_terminating: true,
                     is_valid_gadget: false,
@@ -547,7 +666,7 @@ pub fn is_terminating_insn(
             if detail.groups().contains(&CALL_GRP_ID) {
                 // if a register wasn't read, it's a direct call, which can't exist
                 // in the middle of a gadget
-                if detail.regs_read().len() == 0 {
+                if has_register_operand(insn, detail, arch) {
                     return GadgetSearchInsnInfo {
                         is_terminating: true,
                         is_valid_gadget: false,
@@ -566,7 +685,7 @@ pub fn is_terminating_insn(
             if detail.groups().contains(&JMP_GRP_ID) {
                 // if a register wasn't read, we need to check if this instruction
                 // is a direct jump, which can't exist in the middle of a gadget
-                if detail.regs_read().len() == 0 {
+                if has_register_operand(insn, detail, arch) {
                     // if a register wasn't read and there's no immediate, which
                     // would be stored in the op_str, it's a direct jump
                     if insn.op_str().is_none() {

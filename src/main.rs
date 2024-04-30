@@ -250,11 +250,38 @@ fn main() -> Result<(), String> {
                         )
                     }),
             )
+            // remove nonsense regions that are the full length of the file
+            .filter(|region| region.1 < bin_data.len())
             // some regions appear as sections and segments, so deduplicate them by
             // keying on their load addresses
             .unique_by(|region| region.0)
+            .sorted()
             .collect();
     }
+
+    // filter out any search regions that overlap with others to avoid
+    // searching twice
+    let mut region_iter = search_regions.iter();
+    let mut prev_reg: (usize, usize) = (0, 0);
+    let mut bad_reg_addrs: Vec<usize> = Vec::new();
+    while let Some(cur_region) = region_iter.next() {
+        // if the previous region overlaps this one, mark it for removel
+        if prev_reg.1 > cur_region.0 + cur_region.1 {
+            eprintln!(
+                "Region starting @0x{:x} overlaps subsequent region! Ignoring...",
+                prev_reg.0
+            );
+            bad_reg_addrs.push(prev_reg.0);
+        }
+        // update prev_reg
+        prev_reg = (cur_region.0, cur_region.0 + cur_region.1)
+    }
+
+    // remove any regions that need to be deleted
+    search_regions = search_regions
+        .into_iter()
+        .filter(|region| !bad_reg_addrs.iter().contains(&region.0))
+        .collect();
 
     if !Capstone::supports_arch(bin_arch.to_cs_arch()) {
         // TODO(garnt): remove if riscv supports_arch() bug gets fixed
@@ -427,7 +454,7 @@ fn main() -> Result<(), String> {
         eprintln!("{} unique gadgets after filtering", mnemonics.len());
     }
 
-    // (garnt): add flag to find function names per-gadget using symbols
+    // TODO(garnt): add flag to find function names per-gadget using symbols
 
     // if we should write to the out_file, do that, otherwise, write to stdout
     let out_dest: Box<dyn std::io::Write> = if use_out_file {
