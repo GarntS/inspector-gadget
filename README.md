@@ -3,6 +3,19 @@
 A cli-based, multi-architecture gadget-finding tool, designed for fast
 operation, even with large binaries like browser engines and OS kernels.
 
+[![Crates.io](https://img.shields.io/crates/v/inspector-gadget.svg)](https://crates.io/crates/inspector-gadget)
+
+## Main Features
+- Detects and parses PE/COFF, ELF, and Mach-O object files to pull
+architecture, endianness, and executable section/segment flags.
+- Support for arm, arm64, x86, x86_64, mips, mips64, ppc, ppc64, riscv,
+riscv64, sparc64, and s390x/systemz architectures.
+- Located gadgets are de-duplicated, with all load addresses for a given gadget
+listed in the output.
+- Built-in regex engine for pre-filtering mnemonics of gadget results.
+- Configurable gadget instruction counts and ending instructions.
+- It's _fast._
+
 ## Usage
 
 The minimal invocation of `inspector-gadget` is very simple:
@@ -67,6 +80,25 @@ instructions. If you'd like to change these bounds, use the `--min-insns` and
 inspector-gadget --min-insns 4 --max-insns 6 /usr/bin/grep
 ```
 
+### Changing Gadget Ending Instructions
+
+By default, `inspector-gadget` will only search for gadgets ending with
+whatever instruction are used for a function return for the given architecture.
+If you'd like to also allow terminating indirect jumps or terminating indirect
+calls, use the `--allow-terminating-call` or `--allow-terminating-jmp` flags:
+
+```bash
+inspector-gadget --allow-terminating-call /usr/bin/grep
+```
+
+*Note: this works great for architectures that have obvious distinctions
+between instructions that are used for jmp/call/ret, but is less effective or
+non-functional for RISC architectures that re-use the same instructions for
+control flow. I've manually implemented heuristics for return instructions for
+each architecture, but if call/jmp instructions aren't specifically tagged by
+Capstone for your target architecture, I haven't gone back through and done
+separate ones myself.*
+
 ### Manually-Specifying Architecture and Endianness
 
 By default, `inspector-gadget` will parse the object file passed as input in
@@ -94,7 +126,7 @@ must be specified manually. Endianness will default to little-endian if the*
 `--endianness` *flag is not passed, as it is significantly more common.*
 `--arch` *must always be passed when using* `--raw-binary`.
 
-# Implementation Details
+## Implementation Details
 
 `inspector-gadget` is built on the
 [Capstone](https://www.capstone-engine.org) disassembly framework, and
@@ -120,6 +152,48 @@ during the initial pass.
 
 `inspector-gadget` also implements object file parsing for the PE/COFF,
 ELF, and Mach-O file formats, as well as support for raw input blobs.
+
+## Further Documentation
+Documentation is available on [docs.rs](https://docs.rs/crate/inspector-gadget).
+
+Functions and structures are all commented using Rust's doc comments, so
+`rust doc` should generate pretty good documentation.
+
+## Performance
+
+On my test box, it takes less than 10 seconds to find every gadget in an
+Android arm64 build of `libmonochrome.so`, the dylib used by Chrome and the
+Android system webview:
+
+```bash
+time target/release/inspector-gadget test_bins/libmonochrome_64.so > /dev/null
+[...]
+real    0m9.758s
+```
+
+The next-best option was [Ropper](https://github.com/sashs/Ropper), which took
+about 35 minutes and didn't bother de-duplicating or sorting the gadgets that
+it found.
+
+A Windows x86_64 build of `xul.dll`, the Firefox dylib, took about a minute and
+a half to process:
+```bash
+time target/release/inspector-gadget test_bins/xul.dll > /dev/null
+[...]
+real    1m25.907s
+```
+
+I gave up waiting on an actual number from Ropper after about 3 hours, but
+anecdotally it used to be a "run it overnight" sort of problem.
+
+When targeting smaller binaries, results are near-instant:
+```bash
+time target/release/inspector-gadget test_bins/apple-mfi-fastcharge.ko
+[...]
+real    0m0.113s
+```
+
+*TODO(garnt): collect better data and make some graphs.*
 
 # License
 `inspector-gadget` is licensed under [GPLv3](LICENSE).
