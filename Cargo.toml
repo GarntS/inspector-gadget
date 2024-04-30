@@ -1,6 +1,16 @@
 [package]
 name = "inspector-gadget"
 version = "0.3.0"
+authors = ["garnt"]
+description= """
+A cli-based, multi-architecture gadget-finding tool, designed for fast
+operation, even with large binaries like browser engines and OS kernels.
+"""
+documentation = "https://github.com/garnts/inspector-gadget"
+homepage = "https://github.com/garnts/inspector-gadget"
+repository = "https://github.com/garnts/inspector-gadget"
+keywords = ["gadget", "rop"]
+license = "GPLv3"
 edition = "2021"
 
 [dependencies]
