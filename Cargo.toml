@@ -11,7 +11,6 @@ homepage = "https://github.com/garnts/inspector-gadget"
 repository = "https://github.com/garnts/inspector-gadget"
 keywords = ["gadget", "rop"]
 license = "GPL-3.0"
-license-file = "LICENSE"
 edition = "2021"
 
 [dependencies]
@@ -23,3 +22,18 @@ itertools = "0.12.1"
 object = "0.35.0"
 rayon = "1.10.0"
 regex = "1.10.4"
+
+# This is the main way to strip binaries in the deb package created by
+# 'cargo deb'. For other release binaries, we (currently) call 'strip'
+# explicitly in the release process.
+[profile.deb]
+inherits = "release"
+debug = false
+
+[package.metadata.deb]
+section = "utils"
+assets = [
+  ["target/release/inspector-gadget", "usr/bin/", "755"],
+  ["LICENSE", "usr/share/doc/inspector-gadget/", "644"],
+  ["README.md", "usr/share/doc/inspector-gadget/README", "644"],
+]
